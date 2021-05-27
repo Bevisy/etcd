@@ -128,6 +128,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	}
 
 	p := filepath.Join(tmpdirpath, walName(0, 0))
+	// TOFO: fileutil.LockFile() 作用？
 	f, err := fileutil.LockFile(p, os.O_WRONLY|os.O_CREATE, fileutil.PrivateFileMode)
 	if err != nil {
 		if lg != nil {
