@@ -301,6 +301,7 @@ func startEtcdOrProxyV2() {
 
 // startEtcd runs StartEtcd in addition to hooks needed for standalone etcd.
 func startEtcd(cfg *embed.Config) (<-chan struct{}, <-chan error, error) {
+	// 启动 etcd server
 	e, err := embed.StartEtcd(cfg)
 	if err != nil {
 		return nil, nil, err

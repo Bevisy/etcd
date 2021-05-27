@@ -93,6 +93,7 @@ type peerListener struct {
 // The returned Etcd.Server is not guaranteed to have joined the cluster. Wait
 // on the Etcd.Server.ReadyNotify() channel to know when it completes and is ready for use.
 func StartEtcd(inCfg *Config) (e *Etcd, err error) {
+	// 校验 server 配置
 	if err = inCfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -212,6 +213,8 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		WarningApplyDuration:        cfg.ExperimentalWarningApplyDuration,
 	}
 	print(e.cfg.logger, *cfg, srvcfg, memberInitialized)
+
+	// etcdserver.NewServer() 初始化server，包括 backend 初始化（bbolt）
 	if e.Server, err = etcdserver.NewServer(srvcfg); err != nil {
 		return e, err
 	}
@@ -229,6 +232,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 			return e, err
 		}
 	}
+	// 最终 sever 启动入口
 	e.Server.Start()
 
 	if err = e.servePeers(); err != nil {
