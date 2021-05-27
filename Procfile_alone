@@ -1,0 +1,2 @@
+# Use goreman to run `go get github.com/mattn/goreman`
+etcd1: bin/etcd --name infra1 --listen-client-urls http://127.0.0.1:2379 --advertise-client-urls http://127.0.0.1:2379 --listen-peer-urls http://127.0.0.1:12380 --initial-advertise-peer-urls http://127.0.0.1:12380 --initial-cluster-token etcd-cluster-1 --initial-cluster 'infra1=http://127.0.0.1:12380' --initial-cluster-state new --enable-pprof --logger=zap --log-outputs=stderr

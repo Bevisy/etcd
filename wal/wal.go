@@ -100,6 +100,9 @@ type WAL struct {
 // Create creates a WAL ready for appending records. The given metadata is
 // recorded at the head of each WAL file, and can be retrieved with ReadAll
 // after the file is Open.
+// 1. 创建wal目录，用于存储wal日志文件
+// 2. 预分配第一个wal日志文件，默认64MB，使用预分配机制可以提高写入性能
+// 3. Open 在 Create 完成后被调用，主要用于打开WAL目录下的日志文件，Open的主要作用是找到当前快照以后的所有WAL日志。
 func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if Exist(dirpath) {
 		return nil, os.ErrExist
