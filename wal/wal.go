@@ -347,6 +347,7 @@ func OpenForRead(lg *zap.Logger, dirpath string, snap walpb.Snapshot) (*WAL, err
 }
 
 func openAtIndex(lg *zap.Logger, dirpath string, snap walpb.Snapshot, write bool) (*WAL, error) {
+	// snap index 需要大于 wal 文件记录的初始index；names[] 内的wal文件已经升序排列
 	names, nameIndex, err := selectWALFiles(lg, dirpath, snap)
 	if err != nil {
 		return nil, err
