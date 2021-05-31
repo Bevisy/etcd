@@ -36,11 +36,11 @@ import (
 )
 
 const (
-	metadataType int64 = iota + 1
-	entryType
-	stateType
-	crcType
-	snapshotType
+	metadataType int64 = iota + 1 // 特殊的日志项，被写在每个wal文件的头部
+	entryType                     // 应用的更新数据，也是日志中存储的最关键数据
+	stateType                     // 代表日志项中存储的内容是快照
+	crcType                       // 前一个wal文件里面的数据的crc，也是wal文件的第一个记录项
+	snapshotType                  // 当前快照的索引{term, index}，即当前的快照位于哪个日志记录，不同于stateType，这里只记录快照的索引，而非快照的数据
 
 	// warnSyncDuration is the amount of time allotted to an fsync before
 	// logging a warning
@@ -100,21 +100,20 @@ type WAL struct {
 // Create creates a WAL ready for appending records. The given metadata is
 // recorded at the head of each WAL file, and can be retrieved with ReadAll
 // after the file is Open.
-// 1. 创建wal目录，用于存储wal日志文件
-// 2. 预分配第一个wal日志文件，默认64MB，使用预分配机制可以提高写入性能
-// 3. Open 在 Create 完成后被调用，主要用于打开WAL目录下的日志文件，Open的主要作用是找到当前快照以后的所有WAL日志。
 func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if Exist(dirpath) {
 		return nil, os.ErrExist
 	}
 
 	// keep temporary wal directory so WAL initialization appears atomic
+	// 保留临时 wal 目录，以便 WAL 初始化显得原子化
 	tmpdirpath := filepath.Clean(dirpath) + ".tmp"
 	if fileutil.Exist(tmpdirpath) {
 		if err := os.RemoveAll(tmpdirpath); err != nil {
 			return nil, err
 		}
 	}
+	// 创建 WAL 目录，用于存储 WAL 日志文件
 	if err := fileutil.CreateDirAll(tmpdirpath); err != nil {
 		if lg != nil {
 			lg.Warn(
@@ -127,8 +126,9 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		return nil, err
 	}
 
+	// 第一个 WAL 日志文件名称：0000000000000000-0000000000000000.wal
 	p := filepath.Join(tmpdirpath, walName(0, 0))
-	// TOFO: fileutil.LockFile() 作用？
+	// 创建 WAL 日志文件，并添加写锁(LOCK_EX: 排它锁)
 	f, err := fileutil.LockFile(p, os.O_WRONLY|os.O_CREATE, fileutil.PrivateFileMode)
 	if err != nil {
 		if lg != nil {
@@ -140,6 +140,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		}
 		return nil, err
 	}
+	// 将文件偏移量移至末尾，将从文件末尾开始写入数据
 	if _, err = f.Seek(0, io.SeekEnd); err != nil {
 		if lg != nil {
 			lg.Warn(
@@ -150,6 +151,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		}
 		return nil, err
 	}
+	// 预分配第一个 WAL 日志文件，默认是 64MB。使用预分配机制可以提高写入性能
 	if err = fileutil.Preallocate(f.File, SegmentSizeBytes, true); err != nil {
 		if lg != nil {
 			lg.Warn(
@@ -167,21 +169,30 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		dir:      dirpath,
 		metadata: metadata,
 	}
+	// 为 page writer 创建一个具有当前文件偏移量的新的 encoder
+	// TODO： encoder 结构，以及这里初始化的意义？
 	w.encoder, err = newFileEncoder(f.File, 0)
 	if err != nil {
 		return nil, err
 	}
+	// 增加 有文件锁的文件
 	w.locks = append(w.locks, f)
+	// 初始化 crc 纠错码
+	// TODO：crc 记错码如何计算？
 	if err = w.saveCrc(0); err != nil {
 		return nil, err
 	}
 	if err = w.encoder.encode(&walpb.Record{Type: metadataType, Data: metadata}); err != nil {
 		return nil, err
 	}
+	// TODO：初始化快照？
 	if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
 		return nil, err
 	}
 
+	// 重命名临时文件夹；
+	//
+	// Open 在 Create 完成后被调用，主要用于打开WAL目录下的日志文件，Open的主要作用是找到当前快照以后的所有WAL日志。
 	if w, err = w.renameWAL(tmpdirpath); err != nil {
 		if lg != nil {
 			lg.Warn(
@@ -202,6 +213,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	}()
 
 	// directory was renamed; sync parent dir to persist rename
+	// wal 文件重新命名后，fsync 目录
 	pdir, perr := fileutil.OpenDir(filepath.Dir(w.dir))
 	if perr != nil {
 		if lg != nil {
@@ -226,6 +238,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		}
 		return nil, perr
 	}
+	// fsync metrics 数据统计
 	walFsyncSec.Observe(time.Since(start).Seconds())
 
 	if perr = pdir.Close(); perr != nil {
@@ -346,6 +359,7 @@ func OpenForRead(lg *zap.Logger, dirpath string, snap walpb.Snapshot) (*WAL, err
 	return openAtIndex(lg, dirpath, snap, false)
 }
 
+// 寻找最新的快照之后的日志文件并打开
 func openAtIndex(lg *zap.Logger, dirpath string, snap walpb.Snapshot, write bool) (*WAL, error) {
 	// snap index 需要大于 wal 文件记录的初始index；names[] 内的wal文件已经升序排列
 	names, nameIndex, err := selectWALFiles(lg, dirpath, snap)
@@ -353,6 +367,7 @@ func openAtIndex(lg *zap.Logger, dirpath string, snap walpb.Snapshot, write bool
 		return nil, err
 	}
 
+	// 打开快照索引之后的全部 WAL 日志文件
 	rs, ls, closer, err := openWALFiles(lg, dirpath, names, nameIndex, write)
 	if err != nil {
 		return nil, err
@@ -962,6 +977,7 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	return w.cut()
 }
 
+// 增加 snapShot 记录
 func (w *WAL) SaveSnapshot(e walpb.Snapshot) error {
 	b := pbutil.MustMarshal(&e)
 
@@ -976,6 +992,7 @@ func (w *WAL) SaveSnapshot(e walpb.Snapshot) error {
 	if w.enti < e.Index {
 		w.enti = e.Index
 	}
+	// 调用 *WAL.sync() 数据落盘
 	return w.sync()
 }
 
