@@ -113,6 +113,7 @@ func (st StateType) String() string {
 }
 
 // Config contains the parameters to start a raft.
+// Config 包含启动 raft 需要的参数
 type Config struct {
 	// ID is the identity of the local raft. ID cannot be 0.
 	ID uint64
@@ -251,6 +252,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
+//  raft 结构体
 type raft struct {
 	id uint64
 
