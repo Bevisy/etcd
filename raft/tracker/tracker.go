@@ -119,8 +119,10 @@ type ProgressTracker struct {
 
 	Progress ProgressMap
 
+	// 在选举过程，如果当前节点收到了来自某个节点的投票， 则会将 votes 中对应的值设置为 true，通过统计 Votes 这个 map，就可以确定当前节点收到的投票是否超过半数
 	Votes map[uint64]bool
 
+	// 对于当前节点来说，己经发送出去但未收到响应的消息个数上限。处于该状态的消息超过 MaxInflaight 阈值，则暂停当前节点的消息发送。防止集群中某个节点不断发送消息，引起网路拥塞或者压垮其它节点
 	MaxInflight int
 }
 
