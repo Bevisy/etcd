@@ -254,21 +254,27 @@ func (c *Config) validate() error {
 
 //  raft 结构体
 type raft struct {
+	// 当前节点集群ID
 	id uint64
 
+	// 当前任期号。如果 Message 的 Term 字段为 0，则表示该消息是本地消息，例如，后面提到的 MsgHup 、 MsgProp 、 MsgReadlndex 等消息 ， 都属于本地消息
 	Term uint64
+	// 当前任期中当前节点选票投给节点，未投票时，字段为 None
 	Vote uint64
 
 	readStates []ReadState
 
-	// the log
+	// 本地 log
 	raftLog *raftLog
 
+	// 单条消息最大字节数
 	maxMsgSize         uint64
 	maxUncommittedSize uint64
 	// TODO(tbg): rename to trk.
+	// 对等节点日志复制情况（NextIndex，MarchIndex）
 	prs tracker.ProgressTracker
 
+	// 当前节点角色 "StateFollower","StateCandidate","StateLeader","StatePreCandidate"
 	state StateType
 
 	// isLearner is true if the local raft node is a learner.
