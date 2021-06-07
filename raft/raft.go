@@ -112,21 +112,15 @@ func (st StateType) String() string {
 	return stmap[uint64(st)]
 }
 
-// Config contains the parameters to start a raft.
 // Config 包含启动 raft 需要的参数
 type Config struct {
-	// ID is the identity of the local raft. ID cannot be 0.
+	// ID 是本地 raft 的身份标识。不能为 0
 	ID uint64
 
-	// peers contains the IDs of all nodes (including self) in the raft cluster. It
-	// should only be set when starting a new raft cluster. Restarting raft from
-	// previous configuration will panic if peers is set. peer is private and only
-	// used for testing right now.
+	// peers 包含 raft 集群全部节点（包括自身）的ID。它应该仅仅在启动新 raft 集群时被设置。如果 peers 被设置，那么从之前的配置重启集群会 panic 。peers 是私有的，现在仅仅被用来测试。
 	peers []uint64
 
-	// learners contains the IDs of all learner nodes (including self if the
-	// local node is a learner) in the raft cluster. learners only receives
-	// entries from the leader node. It does not vote or promote itself.
+	// learners 包含 raft 集群全部的 learner 节点 ID（包括自身为learner）。learners 只从 leader 接收 entries。它不参与投票和提升自己。
 	learners []uint64
 
 	// ElectionTick is the number of Node.Tick invocations that must pass between
@@ -277,7 +271,7 @@ type raft struct {
 	// 当前节点角色 "StateFollower","StateCandidate","StateLeader","StatePreCandidate"
 	state StateType
 
-	// isLearner is true if the local raft node is a learner.
+	// 为 true 则当前 raft 节点为 learner
 	isLearner bool
 
 	msgs []pb.Message
@@ -286,6 +280,7 @@ type raft struct {
 	lead uint64
 	// leadTransferee is id of the leader transfer target when its value is not zero.
 	// Follow the procedure defined in raft thesis 3.10.
+	// 用于集群 Leader 节点的转移，记录此次节点转移的目标节点ID
 	leadTransferee uint64
 	// Only one conf change may be pending (in the log, but not yet
 	// applied) at a time. This is enforced via pendingConfIndex, which
@@ -311,9 +306,12 @@ type raft struct {
 	// only leader keeps heartbeatElapsed.
 	heartbeatElapsed int
 
+	// CheckQuorum 机制： 每隔一段时间， Leader 节点会尝试连接集群中的其他节点（发送心跳消息），如果发现自己可以连接到节点个数没有超过半数（即没有收到足够的心跳响应），则主动切换成 Follower 状态。
 	checkQuorum bool
-	preVote     bool
+	// 节点进入 candidate 之前，需要连接其他节点发送消息询问是否参与选举，当超过半数节点响应并参与新一轮的选举，则可以发起新一轮选举
+	preVote bool
 
+	// 心跳超时时间， 当 heartbeatElapsed 字段值到达该值时，就会触发 Leader 节点发送一条心跳消息。
 	heartbeatTimeout int
 	electionTimeout  int
 	// randomizedElectionTimeout is a random number between
