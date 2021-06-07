@@ -108,22 +108,22 @@ func (ms *MemoryStorage) SetHardState(st pb.HardState) error {
 
 // Entries implements the Storage interface.
 func (ms *MemoryStorage) Entries(lo, hi, maxSize uint64) ([]pb.Entry, error) {
-	ms.Lock()
+	ms.Lock() // 加锁
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
-	if lo <= offset {
+	if lo <= offset { // 检测查询范围。查询已被压缩的 Entry 直接报错
 		return nil, ErrCompacted
 	}
-	if hi > ms.lastIndex()+1 {
+	if hi > ms.lastIndex()+1 { // 检测查询范围。查询未记录的 Entry 直接报错
 		raftLogger.Panicf("entries' hi(%d) is out of bound lastindex(%d)", hi, ms.lastIndex())
 	}
 	// only contains dummy entries.
-	if len(ms.ents) == 1 {
+	if len(ms.ents) == 1 { // ents 默认包含一个假的 Entry，只记录 Term 和 Index，无法被查询
 		return nil, ErrUnavailable
 	}
 
-	ents := ms.ents[lo-offset : hi-offset]
-	return limitSize(ents, maxSize), nil
+	ents := ms.ents[lo-offset : hi-offset] // 获取 lo~hi 之间的 Entry
+	return limitSize(ents, maxSize), nil   // 限制返回 Entry 切片的总字节大小，不超过 maxSize
 }
 
 // Term implements the Storage interface.
@@ -131,13 +131,13 @@ func (ms *MemoryStorage) Term(i uint64) (uint64, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
-	if i < offset {
+	if i < offset { // 查询的 Entry 已经被压缩，报错返回
 		return 0, ErrCompacted
 	}
-	if int(i-offset) >= len(ms.ents) {
+	if int(i-offset) >= len(ms.ents) { // 查询的 Entry.Index 不存在，报错返回
 		return 0, ErrUnavailable
 	}
-	return ms.ents[i-offset].Term, nil
+	return ms.ents[i-offset].Term, nil // 返回查询的 index 对应 Term
 }
 
 // LastIndex implements the Storage interface.
@@ -163,6 +163,7 @@ func (ms *MemoryStorage) firstIndex() uint64 {
 }
 
 // Snapshot implements the Storage interface.
+// 获取 Snapshot
 func (ms *MemoryStorage) Snapshot() (pb.Snapshot, error) {
 	ms.Lock()
 	defer ms.Unlock()
@@ -172,18 +173,18 @@ func (ms *MemoryStorage) Snapshot() (pb.Snapshot, error) {
 // ApplySnapshot overwrites the contents of this Storage object with
 // those of the given snapshot.
 func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
-	ms.Lock()
+	ms.Lock() // 加锁同步
 	defer ms.Unlock()
 
 	//handle check for old snapshot being applied
 	msIndex := ms.snapshot.Metadata.Index
 	snapIndex := snap.Metadata.Index
-	if msIndex >= snapIndex {
+	if msIndex >= snapIndex { // 比较两个 pb.Snapshot 所包含的最后一条记录的 Index 值。如果待处理数据较旧，则直接返回错误
 		return ErrSnapOutOfDate
 	}
 
-	ms.snapshot = snap
-	ms.ents = []pb.Entry{{Term: snap.Metadata.Term, Index: snap.Metadata.Index}}
+	ms.snapshot = snap                                                           // 更新 MemoryStorage.snapshot 字段
+	ms.ents = []pb.Entry{{Term: snap.Metadata.Term, Index: snap.Metadata.Index}} // 重置字段 MemoryStorage.ents，此时 ents 中只包含一个空的 Entry 实例
 	return nil
 }
 
@@ -191,9 +192,14 @@ func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 // can be used to reconstruct the state at that point.
 // If any configuration changes have been made since the last compaction,
 // the result of the last ApplyConfChange must be passed in.
+// 参数意义：
+// 		   i: 新建 Snapshot 包含的最大索引值
+// 		  cs: 当前集群的状态
+// 		data: 新建 Snapshot 的具体数据
 func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte) (pb.Snapshot, error) {
 	ms.Lock()
 	defer ms.Unlock()
+	// i 有效性检查
 	if i <= ms.snapshot.Metadata.Index {
 		return pb.Snapshot{}, ErrSnapOutOfDate
 	}
@@ -203,12 +209,12 @@ func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte)
 		raftLogger.Panicf("snapshot %d is out of bound lastindex(%d)", i, ms.lastIndex())
 	}
 
-	ms.snapshot.Metadata.Index = i
-	ms.snapshot.Metadata.Term = ms.ents[i-offset].Term
+	ms.snapshot.Metadata.Index = i                     // 更新 ms 的 Index 为 Snapshot 最大值
+	ms.snapshot.Metadata.Term = ms.ents[i-offset].Term // 更新 ms 的 Term 为 上述 Index 对应的 Term
 	if cs != nil {
-		ms.snapshot.Metadata.ConfState = *cs
+		ms.snapshot.Metadata.ConfState = *cs // 更新集群状态
 	}
-	ms.snapshot.Data = data
+	ms.snapshot.Data = data // 更新具体的快照数据
 	return ms.snapshot, nil
 }
 
@@ -219,7 +225,7 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 	ms.Lock()
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
-	if compactIndex <= offset {
+	if compactIndex <= offset { // 边界检测
 		return ErrCompacted
 	}
 	if compactIndex > ms.lastIndex() {
@@ -227,11 +233,11 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 	}
 
 	i := compactIndex - offset
-	ents := make([]pb.Entry, 1, 1+uint64(len(ms.ents))-i)
+	ents := make([]pb.Entry, 1, 1+uint64(len(ms.ents))-i) // 新建切片 ents，并预分配指定长度
 	ents[0].Index = ms.ents[i].Index
 	ents[0].Term = ms.ents[i].Term
 	ents = append(ents, ms.ents[i+1:]...)
-	ms.ents = ents
+	ms.ents = ents // 更新 ents 字段
 	return nil
 }
 
@@ -239,35 +245,34 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 // TODO (xiangli): ensure the entries are continuous and
 // entries[0].Index > ms.entries[0].Index
 func (ms *MemoryStorage) Append(entries []pb.Entry) error {
-	if len(entries) == 0 {
+	if len(entries) == 0 { // 检测 enrties 切片长度
 		return nil
 	}
 
-	ms.Lock()
+	ms.Lock() // 加锁
 	defer ms.Unlock()
 
-	first := ms.firstIndex()
-	last := entries[0].Index + uint64(len(entries)) - 1
+	first := ms.firstIndex()                            // 获取当前 ms.ents 的 firstindex 值
+	last := entries[0].Index + uint64(len(entries)) - 1 // 获取待添加的最后一条 Entry 的 index 值
 
-	// shortcut if there is no new entry.
-	if last < first {
+	if last < first { // entries 切片中所有的 Entry 均已过时，无须添加任何 Entry
 		return nil
 	}
 	// truncate compacted entries
-	if first > entries[0].Index {
+	if first > entries[0].Index { // first 之前的 Entry 已经计入 Snapshot 中，不需要在记录进 ents 中，所以截掉这部分 Entry
 		entries = entries[first-entries[0].Index:]
 	}
 
 	offset := entries[0].Index - ms.ents[0].Index
 	switch {
 	case uint64(len(ms.ents)) > offset:
-		ms.ents = append([]pb.Entry{}, ms.ents[:offset]...)
+		ms.ents = append([]pb.Entry{}, ms.ents[:offset]...) // 丢弃 ents 中与 entries 重复部分（此部分可能为集群异常产生的无效 Entry），随后追加 entries
 		ms.ents = append(ms.ents, entries...)
 	case uint64(len(ms.ents)) == offset:
-		ms.ents = append(ms.ents, entries...)
+		ms.ents = append(ms.ents, entries...) // ents 直接追加 entries
 	default:
 		raftLogger.Panicf("missing log entry [last: %d, append at: %d]",
-			ms.lastIndex(), entries[0].Index)
+			ms.lastIndex(), entries[0].Index) // 如果 uint64(len(ms.ents)) < offset , 则出现 Entry 丢失
 	}
 	return nil
 }

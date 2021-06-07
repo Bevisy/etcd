@@ -210,18 +210,19 @@ func DescribeEntries(ents []pb.Entry, f EntryFormatter) string {
 }
 
 func limitSize(ents []pb.Entry, maxSize uint64) []pb.Entry {
-	if len(ents) == 0 {
+	if len(ents) == 0 { // 校验切片的长度
 		return ents
 	}
-	size := ents[0].Size()
+	size := ents[0].Size() // 初始化 size
 	var limit int
+	// 遍历 ents 切片，查找 limit 直到容量恰好大于 maxSize 的下标
 	for limit = 1; limit < len(ents); limit++ {
 		size += ents[limit].Size()
 		if uint64(size) > maxSize {
 			break
 		}
 	}
-	return ents[:limit]
+	return ents[:limit] // 返回不包含 limit 下标的 ents 列表
 }
 
 func assertConfStatesEquivalent(l Logger, cs1, cs2 pb.ConfState) {
