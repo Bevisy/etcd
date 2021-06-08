@@ -22,10 +22,12 @@ import pb "go.etcd.io/etcd/raft/raftpb"
 // might need to truncate the log before persisting unstable.entries.
 type unstable struct {
 	// the incoming unstable snapshot, if any.
+	// 快照数据，该快照数据也是未写入 Storage 中的 Entry 记录
 	snapshot *pb.Snapshot
-	// all entries that have not yet been written to storage.
+	// 所有未被保存到 Storage 中的 Entry 记录
 	entries []pb.Entry
-	offset  uint64
+	// entries 中第一条记录的索引值
+	offset uint64
 
 	logger Logger
 }
@@ -33,6 +35,7 @@ type unstable struct {
 // maybeFirstIndex returns the index of the first possible entry in entries
 // if it has a snapshot.
 func (u *unstable) maybeFirstIndex() (uint64, bool) {
+	// 如果存在快照，则返回快照元数据索引+1
 	if u.snapshot != nil {
 		return u.snapshot.Metadata.Index + 1, true
 	}
@@ -42,9 +45,11 @@ func (u *unstable) maybeFirstIndex() (uint64, bool) {
 // maybeLastIndex returns the last index if it has at least one
 // unstable entry or snapshot.
 func (u *unstable) maybeLastIndex() (uint64, bool) {
+	// entries 存在值，则返回最后一个 Entry 的索引
 	if l := len(u.entries); l != 0 {
 		return u.offset + uint64(l) - 1, true
 	}
+	// entries 不存在，返回 Snapshot 元数据的索引
 	if u.snapshot != nil {
 		return u.snapshot.Metadata.Index, true
 	}
@@ -55,7 +60,7 @@ func (u *unstable) maybeLastIndex() (uint64, bool) {
 // is any.
 func (u *unstable) maybeTerm(i uint64) (uint64, bool) {
 	if i < u.offset {
-		if u.snapshot != nil && u.snapshot.Metadata.Index == i {
+		if u.snapshot != nil && u.snapshot.Metadata.Index == i { // i 恰好为 Snapshot 元数据的 Index
 			return u.snapshot.Metadata.Term, true
 		}
 		return 0, false
@@ -65,11 +70,11 @@ func (u *unstable) maybeTerm(i uint64) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	if i > last {
+	if i > last { // i 超过查询范围
 		return 0, false
 	}
 
-	return u.entries[i-u.offset].Term, true
+	return u.entries[i-u.offset].Term, true // 从 entries 字段查找对应的 Term 值
 }
 
 func (u *unstable) stableTo(i, t uint64) {
@@ -80,10 +85,10 @@ func (u *unstable) stableTo(i, t uint64) {
 	// if i < offset, term is matched with the snapshot
 	// only update the unstable entries if term is matched with
 	// an unstable entry.
-	if gt == t && i >= u.offset {
-		u.entries = u.entries[i+1-u.offset:]
-		u.offset = i + 1
-		u.shrinkEntriesArray()
+	if gt == t && i >= u.offset { // 指定 Entry 记录在 unstable.entries 中
+		u.entries = u.entries[i+1-u.offset:] // 指定索引之前的 Entry 记录都已经完成初始化，则将其之前的全部 Entry 记录删除
+		u.offset = i + 1                     // 更新 offset 字段
+		u.shrinkEntriesArray()               // 随着多次追加日志和截断日志的操作，unstable.entries 底层的数组会越来越大，shrinkEntriesArray() 方法会在顶层数组长度超出其实际占用两倍时，对底层数组进行缩减
 	}
 }
 
@@ -106,6 +111,7 @@ func (u *unstable) shrinkEntriesArray() {
 	}
 }
 
+// 指定 index，清空 unstable.snapshot
 func (u *unstable) stableSnapTo(i uint64) {
 	if u.snapshot != nil && u.snapshot.Metadata.Index == i {
 		u.snapshot = nil
@@ -119,19 +125,19 @@ func (u *unstable) restore(s pb.Snapshot) {
 }
 
 func (u *unstable) truncateAndAppend(ents []pb.Entry) {
-	after := ents[0].Index
+	after := ents[0].Index // 获取第一条待追加的 Entry 的索引值
 	switch {
-	case after == u.offset+uint64(len(u.entries)):
+	case after == u.offset+uint64(len(u.entries)): // 待追加的记录与 entries 中的记录正好连续，则直接向 entries 中追加
 		// after is the next index in the u.entries
 		// directly append
 		u.entries = append(u.entries, ents...)
-	case after <= u.offset:
+	case after <= u.offset: // after <= offset，则直接用待追加的 Entry 记录替换当前的 entries 字段 ， 并更新 offset
 		u.logger.Infof("replace the unstable entries from index %d", after)
 		// The log is being truncated to before our current offset
 		// portion, so set the offset and replace the entries
 		u.offset = after
 		u.entries = ents
-	default:
+	default: // offset < after < last，则保留 [offset, after]，追加 ents
 		// truncate to after and copy to u.entries
 		// then append
 		u.logger.Infof("truncate the unstable entries before index %d", after)

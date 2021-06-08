@@ -46,7 +46,15 @@ var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unav
 type Storage interface {
 	// TODO(tbg): split this into two interfaces, LogStorage and StateStorage.
 
-	// InitialState returns the saved HardState and ConfState information.
+	// 返回 Storage 中记录的状态信息。
+	//
+	// pb.HardState:
+	// 		Term: 当前任期号
+	// 		Vote: 当前节点在该任期将选票投给了哪个节点
+	// 		Commit: 已提交 Entry 记录的位置，即最后一条已提交记录的索引值
+	//
+	// pb.ConfState:
+	// 		当前集群所有节点的 ID
 	InitialState() (pb.HardState, pb.ConfState, error)
 	// Entries returns a slice of log entries in the range [lo,hi).
 	// MaxSize limits the total size of the log entries returned, but
