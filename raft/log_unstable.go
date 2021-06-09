@@ -137,7 +137,7 @@ func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 		// portion, so set the offset and replace the entries
 		u.offset = after
 		u.entries = ents
-	default: // offset < after < last，则保留 [offset, after]，追加 ents
+	default: // offset < after < last，则保留 [offset, after] 的部分，并追加新的 ents
 		// truncate to after and copy to u.entries
 		// then append
 		u.logger.Infof("truncate the unstable entries before index %d", after)

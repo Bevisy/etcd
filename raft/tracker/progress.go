@@ -143,41 +143,45 @@ func (pr *Progress) MaybeUpdate(n uint64) bool {
 // are in-flight. As a result, Next is increased to n+1.
 func (pr *Progress) OptimisticUpdate(n uint64) { pr.Next = n + 1 }
 
-// MaybeDecrTo adjusts the Progress to the receipt of a MsgApp rejection. The
-// arguments are the index the follower rejected to append to its log, and its
-// last index.
+// MaybeDecrTo 根据收到的 MsgApp 中拒绝的参数调整 Progress 中的 Next 。参数是跟随者拒绝附加到其日志的索引，以及其最后的索引
 //
 // Rejections can happen spuriously as messages are sent out of order or
 // duplicated. In such cases, the rejection pertains to an index that the
 // Progress already knows were previously acknowledged, and false is returned
 // without changing the Progress.
+// 拒绝可能会虚假地发生，因为消息被不按顺序发送或重复。在这种情况下，拒绝涉及到Progress已经知道以前被确认的索引，并且返回false而不改变Progress
 //
 // If the rejection is genuine, Next is lowered sensibly, and the Progress is
 // cleared for sending log entries.
+// 如果拒绝是真实的， Next 会被合理地降低，Profress 会被清除以发送日志条目。
+//
+// rejected: 被拒绝消息 MsgApp 的 Index
+// last: 对应 follower 节点 raftLog 最有一条 Index
 func (pr *Progress) MaybeDecrTo(rejected, last uint64) bool {
 	if pr.State == StateReplicate {
-		// The rejection must be stale if the progress has matched and "rejected"
+		// The rejection must be stale(陈旧的) if the progress has matched and "rejected"
 		// is smaller than "match".
-		if rejected <= pr.Match {
+		if rejected <= pr.Match { // 过时的 MsgApp 消息，直接忽略
 			return false
 		}
 		// Directly decrease next to match + 1.
 		//
 		// TODO(tbg): why not use last if it's larger?
+		// 处于 StateReplicate 状态时，发送 MsgApp 会调用 Process.optimisticUpfate()方法增加 Next，这会导致 Next 会大 Match 很多，这里直接回退 Next 到 Match+1，后续重新发送消息 MsgApp 进行尝试
 		pr.Next = pr.Match + 1
 		return true
 	}
 
 	// The rejection must be stale if "rejected" does not match next - 1. This
 	// is because non-replicating followers are probed one entry at a time.
-	if pr.Next-1 != rejected {
+	if pr.Next-1 != rejected { // 过时的 MsgAppResp 消息，直接忽略
 		return false
 	}
 
-	if pr.Next = min(rejected, last+1); pr.Next < 1 {
+	if pr.Next = min(rejected, last+1); pr.Next < 1 { // 根据 MsgAppResp 重置 Next
 		pr.Next = 1
 	}
-	pr.ProbeSent = false
+	pr.ProbeSent = false // 恢复消息发送
 	return true
 }
 
