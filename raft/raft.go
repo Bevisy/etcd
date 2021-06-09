@@ -1164,8 +1164,8 @@ func stepLeader(r *raft, m pb.Message) error {
 	}
 
 	// All other message types require a progress for m.From (pr).
-	pr := r.prs.Progress[m.From]
-	if pr == nil {
+	pr := r.prs.Progress[m.From] // 根据消息的 From 字段获取对应的 Process 实例
+	if pr == nil {               // 没有对应的实例，直接返回（该节点可能已经被移出集群）
 		r.logger.Debugf("%x no progress available for %x", r.id, m.From)
 		return nil
 	}
@@ -1173,19 +1173,21 @@ func stepLeader(r *raft, m pb.Message) error {
 	case pb.MsgAppResp:
 		pr.RecentActive = true
 
-		if m.Reject {
+		if m.Reject { // 发送的 MsgApp 消息被拒绝
 			r.logger.Debugf("%x received MsgAppResp(MsgApp was rejected, lastindex: %d) from %x for index %d",
 				r.id, m.RejectHint, m.From, m.Index)
 			if pr.MaybeDecrTo(m.Index, m.RejectHint) {
 				r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
+				// 如果为 StateReplicate 状态，则切换状态。后续需要试探 follower 匹配位置
 				if pr.State == tracker.StateReplicate {
 					pr.BecomeProbe()
 				}
+				// 重新发送消息，试探消息匹配位置
 				r.sendAppend(m.From)
 			}
-		} else {
+		} else { // 发送的 MsgApp 消息被接受
 			oldPaused := pr.IsPaused()
-			if pr.MaybeUpdate(m.Index) {
+			if pr.MaybeUpdate(m.Index) { // 更新对应 Progress 的 Match 和 Index
 				switch {
 				case pr.State == tracker.StateProbe:
 					pr.BecomeReplicate()
@@ -1202,14 +1204,17 @@ func stepLeader(r *raft, m pb.Message) error {
 					pr.BecomeProbe()
 					pr.BecomeReplicate()
 				case pr.State == tracker.StateReplicate:
-					pr.Inflights.FreeLE(m.Index)
+					pr.Inflights.FreeLE(m.Index) // 将收到响应的消息，从 inflights 中删除，并更新窗口大小
 				}
 
+				// 尝试查看此entry是否超过半数节点，并尝试 raftLog.Committed
 				if r.maybeCommit() {
+					// 向所有节点发送 MsgApp 消息，注意，此次消息 Commit 字段与上次消息已不同
 					r.bcastAppend()
 				} else if oldPaused {
 					// If we were paused before, this node may be missing the
 					// latest commit index, so send it.
+					// 如果 leader 节点暂停向该 Follower 节点发送消息，收到 MsgAppResp 消息后，上述代码中已经重置状态，所以可以继续发送消息
 					r.sendAppend(m.From)
 				}
 				// We've updated flow control information above, which may
@@ -1218,6 +1223,7 @@ func stepLeader(r *raft, m pb.Message) error {
 				// replicate, or when freeTo() covers multiple messages). If
 				// we have more entries to send, send as many messages as we
 				// can (without sending empty messages for the commit index)
+				// 我们在上面更新了流量控制信息，这可能允许我们一次发送多个（大小有限的）inflight 消息（比如从探测过渡到复制时，或者当freeTo()涵盖多个消息时）。如果我们有更多的条目要发送，就尽可能多地发送消息（不要为提交索引发送空消息）
 				for r.maybeSendAppend(m.From, false) {
 				}
 				// Transfer leadership is in progress.
@@ -1428,15 +1434,18 @@ func stepFollower(r *raft, m pb.Message) error {
 
 func (r *raft) handleAppendEntries(m pb.Message) {
 	if m.Index < r.raftLog.committed { // 收到的消息已经 commited。发送响应消息 MsgAppResp
-		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
+		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed}) // 已经 committed 的记录无法修改，返回最新已提交的索引
 		return
 	}
 
+	// 尝试追加消息中的 entries 到 raftLog 中
 	if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
+		// 追加成功，将最后一条记录的索引值返回给 leader 节点，leader 节点根据 mlastIndex 更新 Match 和 Next 值
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
 	} else {
 		r.logger.Debugf("%x [logterm: %d, index: %d] rejected MsgApp [logterm: %d, index: %d] from %x",
 			r.id, r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(m.Index)), m.Index, m.LogTerm, m.Index, m.From)
+		// 追加失败，将消息 MsgAppResp 字段 Reject 置为 true，并将 RejectHint 置为当前节点 raftLog 最后一条索引值
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: m.Index, Reject: true, RejectHint: r.raftLog.lastIndex()})
 	}
 }
