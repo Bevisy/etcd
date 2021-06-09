@@ -103,7 +103,7 @@ func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry
 			l.logger.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed)
 		default: // 如果冲突位置是未提交的部分
 			offset := index + 1
-			l.append(ents[ci-offset:]...) // 则将 ents 内发生冲突后的部分追加到 raftLog.unstable 中
+			l.append(ents[ci-offset:]...) // 则将 ents 内新增的部分追加到 raftLog.unstable 中
 		}
 		l.commitTo(min(committed, lastnewi)) // 取 "Leader 节点保持同步 committed" 或者 "当前节点记录的最大 entry 的 index" 中的最小值
 		return lastnewi, true
@@ -125,10 +125,8 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 // findConflict finds the index of the conflict.
 // It returns the first pair of conflicting entries between the existing
 // entries and the given entries, if there are any.
-// If there is no conflicting entries, and the existing entries contains
-// all the given entries, zero will be returned.
-// If there is no conflicting entries, but the given entries contains new
-// entries, the index of the first new entry will be returned.
+// 如果没有冲突的 entries，且已经存在的 entries 包含全部传入的 entries，则返回 0
+// 如果没有冲突的 entries, 但是传入的 ents 包含新的 entries, 第一个新的 entry 的索引将被返回。
 // An entry is considered to be conflicting if it has the same index but
 // a different term.
 // The first entry MUST have an index equal to the argument 'from'.

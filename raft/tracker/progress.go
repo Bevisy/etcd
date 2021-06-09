@@ -20,64 +20,47 @@ import (
 	"strings"
 )
 
-// Progress represents a follower’s progress in the view of the leader. Leader
-// maintains progresses of all followers, and sends entries to the follower
-// based on its progress.
+// Progress 代表一个 follower 在 leader 视野里的进度。Leader 维护所有 follower 的进度，并且基于此进度发送 entries 记录给 follower
 //
-// NB(tbg): Progress is basically a state machine whose transitions are mostly
-// strewn around `*raft.raft`. Additionally, some fields are only used when in a
-// certain State. All of this isn't ideal.
+// NB(tbg): Progress 基本上是一个状态机，它的变动散布在 `*raft.raft` 内。此外，一些字段仅在特定状态下使用。所有的这些并不理想
 type Progress struct {
 	// Match：对应 follower 节点当前已成功复制的 Entry 记录的索引值
 	// Next：对应 follower 节点下一个待复制的 Entry 记录的索引值
 	Match, Next uint64
-	// State defines how the leader should interact with the follower.
+	// State 定义 Leader 如何和 Follower 交互
 	//
-	// When in StateProbe, leader sends at most one replication message
-	// per heartbeat interval. It also probes actual progress of the follower.
+	// 当处于 StateProbe 状态时，leader 每个心跳间隔最多发送一条复制消息。它还会探测跟随者的实际进度
 	//
-	// When in StateReplicate, leader optimistically increases next
-	// to the latest entry sent after sending replication message. This is
-	// an optimized state for fast replicating log entries to the follower.
+	// 当处于 StateReplicate 状态时，Leader在发送复制消息后，乐观地增加最新的条目。这是一个优化状态，用于快速复制日志条目给跟随者
 	//
-	// When in StateSnapshot, leader should have sent out snapshot
-	// before and stops sending any replication message.
+	// 当处于 StateSnapshot 状态时，领导者应该已经发送了快照，并停止发送任何复制消息。
 	State StateType
 
-	// PendingSnapshot is used in StateSnapshot.
-	// If there is a pending snapshot, the pendingSnapshot will be set to the
-	// index of the snapshot. If pendingSnapshot is set, the replication process of
-	// this Progress will be paused. raft will not resend snapshot until the pending one
-	// is reported to be failed.
+	// PendingSnapshot 被用在 StateSnapshot 中。
+	// 如果有一个 pending 快照，pendingSnapshot 将被设置成快照的索引。
+	// 如果 pendingSnapshot 被设置，这个 Progress 的复制进程将被暂停。raft将不会重新发送快照，直到 pending 快照被报告为失败。
 	PendingSnapshot uint64
 
-	// RecentActive is true if the progress is recently active. Receiving any messages
-	// from the corresponding follower indicates the progress is active.
-	// RecentActive can be reset to false after an election timeout.
+	// 如果该进度最近是活跃的，则 RecentActive 为 true。从相应的跟随者那里收到任何消息都表明该进度是活跃的。
+	// 在选举超时后，RecentActive可以被重置为false。
 	//
 	// TODO(tbg): the leader should always have this set to true.
 	RecentActive bool
 
-	// ProbeSent is used while this follower is in StateProbe. When ProbeSent is
-	// true, raft should pause sending replication message to this peer until
-	// ProbeSent is reset. See ProbeAcked() and IsPaused().
+	// 当这个 follower 处于 StateProbe 状态，ProbeSent 被使用。
+	// 当 ProbeSent 为 true，raft 应该暂停发送复制消息到这个节点直到 ProbeSent 被重置。查看 ProbeAcked() 和 IsPaused()
 	ProbeSent bool
 
-	// Inflights is a sliding window for the inflight messages.
-	// Each inflight message contains one or more log entries.
-	// The max number of entries per message is defined in raft config as MaxSizePerMsg.
-	// Thus inflight effectively limits both the number of inflight messages
-	// and the bandwidth each Progress can use.
-	// When inflights is Full, no more message should be sent.
-	// When a leader sends out a message, the index of the last
-	// entry should be added to inflights. The index MUST be added
-	// into inflights in order.
-	// When a leader receives a reply, the previous inflights should
-	// be freed by calling inflights.FreeLE with the index of the last
-	// received entry.
+	// Inflights 是一个滑动窗口，用于记录 inflight 消息
+	// 每个 inflight 消息包含一个或者多个日志条目。
+	// 每个消息的最大条目被 raft 配置 MaxSizePerMsg 定义。
+	// 因此，inflight 有效的限制 inflight 消息的数量 和 每个进程可以使用的带宽。
+	// 当 inflight 是满的，没法在发送更多的消息。
+	// 当 leader 发送完消息，最后一个 entry 的索引应该被添加到 inflights。索引必须被顺序添加加进 inflights。
+	// 当 leader 收到回复，应该通过调用 inflights.FreeLE 和最后收到的条目的索引来释放之前的 inflights。
 	Inflights *Inflights
 
-	// IsLearner is true if this progress is tracked for a learner.
+	// IsLearner 为 true 如果这个进程为 learner 而被跟踪
 	IsLearner bool
 }
 
@@ -127,7 +110,7 @@ func (pr *Progress) BecomeProbe() {
 	}
 }
 
-// BecomeReplicate transitions into StateReplicate, resetting Next to Match+1.
+// BecomeReplicate() 使进程状态过渡到 StateReplicate，重置 Next 为 Match+1
 func (pr *Progress) BecomeReplicate() {
 	pr.ResetState(StateReplicate)
 	pr.Next = pr.Match + 1
@@ -198,7 +181,7 @@ func (pr *Progress) MaybeDecrTo(rejected, last uint64) bool {
 	return true
 }
 
-// IsPaused returns whether sending log entries to this node has been throttled.
+// IsPaused 返回是否发送日志记录到这个节点已经被节制
 // This is done when a node has rejected recent MsgApps, is currently waiting
 // for a snapshot, or has reached the MaxInflightMsgs limit. In normal
 // operation, this is false. A throttled node will be contacted less frequently
