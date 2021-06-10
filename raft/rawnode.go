@@ -139,7 +139,7 @@ func (rn *RawNode) readyWithoutAccept() Ready {
 // this call and the prior call to Ready().
 func (rn *RawNode) acceptReady(rd Ready) {
 	if rd.SoftState != nil {
-		rn.prevSoftSt = rd.SoftState
+		rn.prevSoftSt = rd.SoftState // prevSoftSt 记录此次返回 Ready 实例的 SoftState 状态
 	}
 	if len(rd.ReadStates) != 0 {
 		rn.raft.readStates = nil

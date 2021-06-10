@@ -119,6 +119,14 @@ func IsEmptySnap(sp pb.Snapshot) bool {
 	return sp.Metadata.Index == 0
 }
 
+// 判断 Ready 实例是否个字段为空
+// 分别检测:
+// 		raft状态是否变化
+// 		是否有新的数据快照
+// 		是否有待持久化的 Entry 记录
+// 		是否有待应用的 Entry 记录
+//  	是否有待发送的消息
+// 		是否有处理的只读请求
 func (rd Ready) containsUpdates() bool {
 	return rd.SoftState != nil || !IsEmptyHardState(rd.HardState) ||
 		!IsEmptySnap(rd.Snapshot) || len(rd.Entries) > 0 ||
@@ -402,7 +410,7 @@ func (n *node) run() {
 			if pr := r.prs.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
 				r.Step(m)
 			}
-		case cc := <-n.confc: // 读取 node.confc 通道 ， 获取 ConfChange 实例， 下面根据 ConfChange 中的类型进行分类处理
+		case cc := <-n.confc: // 读取 node.confc 通道 ， 获取 ConfChangeV2 实例
 			_, okBefore := r.prs.Progress[r.id]
 			cs := r.applyConfChange(cc)
 			// If the node was removed, block incoming proposals. Note that we
@@ -433,13 +441,13 @@ func (n *node) run() {
 			}
 		case <-n.tickc: // 逻辑时钟每推进一次，就会向 tickc 通道写入一个信号
 			n.rn.Tick() // 对应 raft.tickElection()、raft.tickHeartbeat()
-		case readyc <- rd: // 将前面创建的 Ready 实例写入 node.readyc 通过 中， 等待上层模块读取
-			n.rn.acceptReady(rd)
-			advancec = n.advancec
-		case <-advancec: // 上层模块处理完 Ready 实例之后， 会向 advance 通道写入信号
+		case readyc <- rd: // 将前面创建的 Ready 实例写入 node.readyc 通道中，等待上层模块读取
+			n.rn.acceptReady(rd)  // 此次 Ready 实例已被发送进 readyc，清空 rd 中的 raft.Msgs, raft.readStates
+			advancec = n.advancec // 将 advancec 指向 n.advancec 通道，下次循环时，就无法继续向上层模块返回 Ready 实例（因为 readyc 被设置为 nil，无法向 nil 通道写入 Ready 实例）
+		case <-advancec: // 上层模块处理完 Ready 实例之后， 会向 advancec 通道写入信号
 			n.rn.Advance(rd)
 			rd = Ready{}
-			advancec = nil
+			advancec = nil // 清空 advancec
 		case c := <-n.status:
 			c <- getStatus(r)
 		case <-n.stop: // 当从 stop 通道中读取到信号时 ，会将 done 通道关闭， 阻塞在其上的 goroutine 可以继续执行
@@ -544,8 +552,8 @@ func (n *node) Ready() <-chan Ready { return n.readyc }
 
 func (n *node) Advance() {
 	select {
-	case n.advancec <- struct{}{}:
-	case <-n.done:
+	case n.advancec <- struct{}{}: // 向 advancec 通道写入信号
+	case <-n.done: // 当前 node 已关闭
 	}
 }
 
@@ -604,19 +612,22 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 // 读取底层 raft 实例中的各项数据及相关状态，并最终封装成 Ready 实例，该 Ready 实例最终会返回给上层模块
 func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
-		Entries:          r.raftLog.unstableEntries(),
-		CommittedEntries: r.raftLog.nextEnts(),
-		Messages:         r.msgs,
+		Entries:          r.raftLog.unstableEntries(), // 获取 raftLog 中 unstable 部分存储的 Entry 记录，这些记录会交给上层模块进行持久化
+		CommittedEntries: r.raftLog.nextEnts(),        // 获取已提交但是未应用的 Entry 记录，即 raftLog 中 applied ~ committed 之间的所有记录
+		Messages:         r.msgs,                      // 获取待发送的消息，raft 实例处理完消息后最终统一放在 raft.msgs 中，等待发送
 	}
+	// 检测两次创建 Ready 实例之间，raft 实例的状态是否发生变化，如果无变化，则将 Ready 实例的相关字段设置为 nil，表示无须上层模块处理
 	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
 		rd.SoftState = softSt
 	}
 	if hardSt := r.hardState(); !isHardStateEqual(hardSt, prevHardSt) {
 		rd.HardState = hardSt
 	}
+	// 检测 unstable 中是否记录了快照数据，如果有，则将其封装到 Ready 实例中，交给上层模块处理
 	if r.raftLog.unstable.snapshot != nil {
 		rd.Snapshot = *r.raftLog.unstable.snapshot
 	}
+	// 检测 raft.readStares 字段，并将其封装到 Ready 实例返回给上层模块
 	if len(r.readStates) != 0 {
 		rd.ReadStates = r.readStates
 	}
