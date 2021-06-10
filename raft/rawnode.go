@@ -45,7 +45,7 @@ type RawNode struct {
 // state manually by setting up a Storage that has a first index > 1 and which
 // stores the desired ConfState as its InitialState.
 func NewRawNode(config *Config) (*RawNode, error) {
-	r := newRaft(config)
+	r := newRaft(config) // 根据 Config 创建 raft 节点
 	rn := &RawNode{
 		raft: r,
 	}
@@ -128,6 +128,8 @@ func (rn *RawNode) Ready() Ready {
 
 // readyWithoutAccept returns a Ready. This is a read-only operation, i.e. there
 // is no obligation that the Ready must be handled.
+//
+// 这是一个只读操作，也就是说，没有义务必须处理 Ready
 func (rn *RawNode) readyWithoutAccept() Ready {
 	return newReady(rn.raft, rn.prevSoftSt, rn.prevHardSt)
 }
