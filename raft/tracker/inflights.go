@@ -20,16 +20,15 @@ package tracker
 // they are sending a new append, and release "quota" via FreeLE() whenever an
 // ack is received.
 type Inflights struct {
-	// the starting index in the buffer
+	// inflights.buffer 数组被当作一个环形数组使用， start 字段中记录 buffer 中第一条 MsgApp 消息的下标
 	start int
-	// number of inflights in the buffer
+	// 当前 inflights 实例中记录的 MsgApp 消息个数
 	count int
 
-	// the size of the buffer
+	// buffer 大小;当前 inflights 实例中能够记录的 MsgApp 消息个数的上限
 	size int
 
-	// buffer contains the index of the last entry
-	// inside one message.
+	// 用来记录 MsgApp 消息相关信息的数组，其中记录的是 MsgApp 消息中最后一条 Entry 记录的索引值
 	buffer []uint64
 }
 
@@ -53,19 +52,20 @@ func (in *Inflights) Clone() *Inflights {
 // for one more message, and consecutive calls to add Add() must provide a
 // monotonic sequence of indexes.
 func (in *Inflights) Add(inflight uint64) {
-	if in.Full() {
+	if in.Full() { // 检测 buffer 数组是否已满
 		panic("cannot add into a Full inflights")
 	}
-	next := in.start + in.count
-	size := in.size
-	if next >= size {
+	next := in.start + in.count // 获取新增消息的下标
+	size := in.size             // 记录消息的上限，等同于数组最大长度
+	if next >= size {           // 环形队列
 		next -= size
 	}
+	// 扩容 buffer 数组
 	if next >= len(in.buffer) {
 		in.grow()
 	}
-	in.buffer[next] = inflight
-	in.count++
+	in.buffer[next] = inflight // 记录 inflight 在 next 位置
+	in.count++                 // count 递增
 }
 
 // grow the inflight buffer by doubling up to inflights.size. We grow on demand
@@ -93,23 +93,24 @@ func (in *Inflights) FreeLE(to uint64) {
 	idx := in.start
 	var i int
 	for i = 0; i < in.count; i++ {
-		if to < in.buffer[idx] { // found the first large inflight
+		if to < in.buffer[idx] { // 查找第一个大于指定索引 to 的 inflight
 			break
 		}
 
 		// increase index and maybe rotate
+		// 因为是环形队列，如果 idx 越界（超过 size），则需要重新转换 buffer 数组下标
 		size := in.size
 		if idx++; idx >= size {
 			idx -= size
 		}
 	}
 	// free i inflights and set new start index
-	in.count -= i
-	in.start = idx
-	if in.count == 0 {
+	in.count -= i      // i 记录释放的消息个数
+	in.start = idx     // 环形队列从 start 到 idx 间的数据被释放（注意实际数据值为释放，但是初始下标 start 和 count 被修改，数组数据等同于被标记失效）
+	if in.count == 0 { // 如果 inflight 全部被清空
 		// inflights is empty, reset the start index so that we don't grow the
 		// buffer unnecessarily.
-		in.start = 0
+		in.start = 0 // 则重置 start，等同于重置 buffer
 	}
 }
 

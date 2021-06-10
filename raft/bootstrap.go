@@ -47,18 +47,20 @@ func (rn *RawNode) Bootstrap(peers []Peer) error {
 
 	// TODO(tbg): remove StartNode and give the application the right tools to
 	// bootstrap the initial membership in a cleaner way.
-	rn.raft.becomeFollower(1, None)
+	rn.raft.becomeFollower(1, None) // 切换成 Follower 状态，由于节点初次启动，任期置为 1
 	ents := make([]pb.Entry, len(peers))
 	for i, peer := range peers {
+		// 根据传递的节点列表，创建对应的 ConfChange 实例，其 Type 是 ConfChangeAddNode,表示添加指定节点
 		cc := pb.ConfChange{Type: pb.ConfChangeAddNode, NodeID: peer.ID, Context: peer.Context}
-		data, err := cc.Marshal()
+		data, err := cc.Marshal() // 序列化 ConfChange 记录
 		if err != nil {
 			return err
 		}
 
+		// 将 ConfChange 记录序列化后的数据封装成 EntryConfChange 类型的 Entry 记录
 		ents[i] = pb.Entry{Type: pb.EntryConfChange, Term: 1, Index: uint64(i + 1), Data: data}
 	}
-	rn.raft.raftLog.append(ents...)
+	rn.raft.raftLog.append(ents...) // 将 EntryConfChange 记录追加到 raftLog 中
 
 	// Now apply them, mainly so that the application can call Campaign
 	// immediately after StartNode in tests. Note that these nodes will
@@ -72,7 +74,8 @@ func (rn *RawNode) Bootstrap(peers []Peer) error {
 	//
 	// TODO(bdarnell): These entries are still unstable; do we need to preserve
 	// the invariant that committed < unstable?
-	rn.raft.raftLog.committed = uint64(len(ents))
+	rn.raft.raftLog.committed = uint64(len(ents)) // 直接修改 raftLog.committed 值，提交上述 EntryConfChange 记录
+	// 为节点列表中的每个节点创建对应的 Progress 实例
 	for _, peer := range peers {
 		rn.raft.applyConfChange(pb.ConfChange{NodeID: peer.ID, Type: pb.ConfChangeAddNode}.AsV2())
 	}
