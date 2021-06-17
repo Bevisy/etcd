@@ -28,7 +28,7 @@ import (
 type kvstore struct {
 	proposeC    chan<- string // channel for proposing updates
 	mu          sync.RWMutex
-	kvStore     map[string]string // current committed key-value pairs
+	kvStore     map[string]string // current committed key-value pairs (存储已提交的 kv)
 	snapshotter *snap.Snapshotter
 }
 
@@ -49,7 +49,7 @@ func newKVStore(snapshotter *snap.Snapshotter, proposeC chan<- string, commitC <
 func (s *kvstore) Lookup(key string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	v, ok := s.kvStore[key]
+	v, ok := s.kvStore[key] // 查询对应的值
 	return v, ok
 }
 
@@ -63,7 +63,7 @@ func (s *kvstore) Propose(k string, v string) {
 
 func (s *kvstore) readCommits(commitC <-chan *string, errorC <-chan error) {
 	for data := range commitC {
-		if data == nil {
+		if data == nil { // 日志重放完成；新数据即将到来 或者 加载快照的信号
 			// done replaying log; new data incoming
 			// OR signaled to load snapshot
 			snapshot, err := s.snapshotter.Load()
@@ -86,7 +86,7 @@ func (s *kvstore) readCommits(commitC <-chan *string, errorC <-chan error) {
 			log.Fatalf("raftexample: could not decode message (%v)", err)
 		}
 		s.mu.Lock()
-		s.kvStore[dataKv.Key] = dataKv.Val
+		s.kvStore[dataKv.Key] = dataKv.Val // 存储键值数据，这里做了简化，不存在 MVCC 控制，只是简单的 map 存储数据到内存
 		s.mu.Unlock()
 	}
 	if err, ok := <-errorC; ok {
@@ -97,12 +97,12 @@ func (s *kvstore) readCommits(commitC <-chan *string, errorC <-chan error) {
 func (s *kvstore) getSnapshot() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return json.Marshal(s.kvStore)
+	return json.Marshal(s.kvStore) // 将 json 数据格式化成字符串，作为快照数据存储
 }
 
 func (s *kvstore) recoverFromSnapshot(snapshot []byte) error {
 	var store map[string]string
-	if err := json.Unmarshal(snapshot, &store); err != nil {
+	if err := json.Unmarshal(snapshot, &store); err != nil { // 将快照数据还原成json字符串，并恢复到存储中
 		return err
 	}
 	s.mu.Lock()

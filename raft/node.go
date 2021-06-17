@@ -80,7 +80,7 @@ type Ready struct {
 
 	// Snapshot specifies the snapshot to be saved to stable storage.
 	//
-	// 待持久化的快照数据， ra企pb.Snapshot 中封装了快照数据及相关元数据
+	// 待持久化的快照数据， raftpb.Snapshot 中封装了快照数据及相关元数据
 	Snapshot pb.Snapshot
 
 	// CommittedEntries specifies entries to be committed to a
@@ -159,7 +159,7 @@ type Node interface {
 	// Propose proposes that data be appended to the log. Note that proposals can be lost without
 	// notice, therefore it is user's job to ensure proposal retries.
 	//
-	// Propose 处理客户端的写请求。接收到 Client 发来的写请求时， Node 实例会调用 Propose （）方法进行处理，底层就是通过发送 MsgProp 消息实现的
+	// Propose 处理客户端的写请求。接收到 Client 发来的写请求时， Node 实例会调用 Propose() 方法进行处理，底层就是通过发送 MsgProp 消息实现的
 	Propose(ctx context.Context, data []byte) error
 	// ProposeConfChange proposes a configuration change. Like any proposal, the
 	// configuration change may be dropped with or without an error being
