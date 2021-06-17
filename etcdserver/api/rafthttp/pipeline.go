@@ -43,28 +43,30 @@ const (
 var errStopped = errors.New("stopped")
 
 type pipeline struct {
-	peerID types.ID
+	peerID types.ID // pipeline 对应节点的ID
 
-	tr     *Transport
+	tr     *Transport // 关联的 rafthttp.Transport 实例
 	picker *urlPicker
 	status *peerStatus
-	raft   Raft
+	raft   Raft // 底层 Raft 实例
 	errorc chan error
 	// deprecate when we depercate v2 API
 	followerStats *stats.FollowerStats
 
-	msgc chan raftpb.Message
+	msgc chan raftpb.Message // pipeline 实例从该通道中获取待发送的消息
 	// wait for the handling routines
-	wg    sync.WaitGroup
+	wg    sync.WaitGroup // 负责同步多个 goroutine 结束。每个 pipeline 实例会启动多个后台 goroutine (默认值是 4 个)来处理 msgc 通道中的消息，在 pipeline.stop()方	法中必须等待这些 goroutine 都结束(通过 wg.Wait()方法实现)，才能真正关闭该 pipeline 实例
 	stopc chan struct{}
 }
 
+// 初始化 pipeline，并启动发送消息的 goroutines(默认4个)
 func (p *pipeline) start() {
 	p.stopc = make(chan struct{})
+	// 注意：缓存默认是64，为了防止瞬间网络延迟造成消息丢失
 	p.msgc = make(chan raftpb.Message, pipelineBufSize)
 	p.wg.Add(connPerPipeline)
 	for i := 0; i < connPerPipeline; i++ {
-		go p.handle()
+		go p.handle() // 从 p.msgc 通道获取消息，并处理
 	}
 
 	if p.tr != nil && p.tr.Logger != nil {
@@ -98,9 +100,9 @@ func (p *pipeline) handle() {
 
 	for {
 		select {
-		case m := <-p.msgc:
+		case m := <-p.msgc: // 获取待发送的消息（MsgSnap 类型）
 			start := time.Now()
-			err := p.post(pbutil.MustMarshal(&m))
+			err := p.post(pbutil.MustMarshal(&m)) // 将消息序列化，然后创建 HTTP 请求并发送
 			end := time.Now()
 
 			if err != nil {
@@ -121,6 +123,7 @@ func (p *pipeline) handle() {
 			if m.Type == raftpb.MsgApp && p.followerStats != nil {
 				p.followerStats.Succ(end.Sub(start))
 			}
+			// 向底层 Raft 状态机报告发送成功的消息
 			if isMsgSnap(m) {
 				p.raft.ReportSnapshot(m.To, raft.SnapshotFinish)
 			}
@@ -133,24 +136,29 @@ func (p *pipeline) handle() {
 
 // post POSTs a data payload to a url. Returns nil if the POST succeeds,
 // error on any failure.
+//
+// post 发送一个数据负载到指定 url
+// 成功则返回 nil，失败则报错
 func (p *pipeline) post(data []byte) (err error) {
-	u := p.picker.pick()
+	u := p.picker.pick() // 获取 peer 可用 URL地址
+	// 创建 http POST 请求用来发送 raft 消息
 	req := createPostRequest(u, RaftPrefix, bytes.NewBuffer(data), "application/protobuf", p.tr.URLs, p.tr.ID, p.tr.ClusterID)
 
 	done := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	req = req.WithContext(ctx)
-	go func() {
+	go func() { // 监听请求是否需要取消
 		select {
 		case <-done:
-		case <-p.stopc:
+		case <-p.stopc: // 请求发送过程中，如果 pipeline 被关闭，则取消请求
 			waitSchedule()
-			cancel()
+			cancel() // 取消请求
 		}
 	}()
 
+	// 发送构造的 POST 请求，并获取响应
 	resp, err := p.tr.pipelineRt.RoundTrip(req)
-	done <- struct{}{}
+	done <- struct{}{} // 通知 POST 请求发送完成
 	if err != nil {
 		p.picker.unreachable(u)
 		return err
@@ -162,6 +170,7 @@ func (p *pipeline) post(data []byte) (err error) {
 		return err
 	}
 
+	// 检测响应内容
 	err = checkPostResponse(resp, b, req, p.peerID)
 	if err != nil {
 		p.picker.unreachable(u)
