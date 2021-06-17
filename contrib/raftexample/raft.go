@@ -164,7 +164,7 @@ func (rc *raftNode) publishEntries(ents []raftpb.Entry) bool {
 			}
 			s := string(ents[i].Data)
 			select {
-			case rc.commitC <- &s:
+			case rc.commitC <- &s: // 将数据写入 commitC 通道，kvstore会从中读取并记录相应的kv值
 			case <-rc.stopc:
 				return false
 			}
@@ -172,7 +172,8 @@ func (rc *raftNode) publishEntries(ents []raftpb.Entry) bool {
 		case raftpb.EntryConfChange:
 			var cc raftpb.ConfChange
 			cc.Unmarshal(ents[i].Data)
-			rc.confState = *rc.node.ApplyConfChange(cc)
+			rc.confState = *rc.node.ApplyConfChange(cc) // 将 ConfChange 实例传入底层的 etcd-raft 实例
+			// 除了 raft 需要创建和删除对应 Progress 实例，网络层组件需要添加或者删除对应的 Peer 实例
 			switch cc.Type { // 节点变更信息类型
 			case raftpb.ConfChangeAddNode: // 增加节点
 				if len(cc.Context) > 0 {
@@ -188,9 +189,10 @@ func (rc *raftNode) publishEntries(ents []raftpb.Entry) bool {
 		}
 
 		// after commit, update appliedIndex
-		rc.appliedIndex = ents[i].Index
+		rc.appliedIndex = ents[i].Index // commit 完成后，更新已应用记录的索引
 
 		// special nil commit to signal replay has finished
+		// 此次应用是否是重放的 Entry 记录，如果是，且重放完成，则使用 commitC 通道通知 kvstore
 		if ents[i].Index == rc.lastIndex {
 			select {
 			case rc.commitC <- nil:
@@ -377,23 +379,27 @@ func (rc *raftNode) publishSnapshot(snapshotToSave raftpb.Snapshot) {
 var snapshotCatchUpEntriesN uint64 = 10000
 
 func (rc *raftNode) maybeTriggerSnapshot() {
-	if rc.appliedIndex-rc.snapshotIndex <= rc.snapCount {
+	if rc.appliedIndex-rc.snapshotIndex <= rc.snapCount { // 已应用的记录和快照索引的差值，确定是否执行快照
 		return
 	}
 
 	log.Printf("start snapshot [applied index: %d | last snapshot index: %d]", rc.appliedIndex, rc.snapshotIndex)
+	// 获取快照数据，在 raftexarnple 示例中是获取 kvstore 中记录的全部键位对数据
 	data, err := rc.getSnapshot()
 	if err != nil {
 		log.Panic(err)
 	}
+	// 创建 Snapshot 实例， 同时也会将快照和元数据更新到 raftLog.MernoryStorage 中
 	snap, err := rc.raftStorage.CreateSnapshot(rc.appliedIndex, &rc.confState, data)
 	if err != nil {
 		panic(err)
 	}
+	// 保存快照
 	if err := rc.saveSnap(snap); err != nil {
 		panic(err)
 	}
 
+	// 获取压缩位置，此位置之前的记录将被删除
 	compactIndex := uint64(1)
 	if rc.appliedIndex > snapshotCatchUpEntriesN {
 		compactIndex = rc.appliedIndex - snapshotCatchUpEntriesN
@@ -403,7 +409,7 @@ func (rc *raftNode) maybeTriggerSnapshot() {
 	}
 
 	log.Printf("compacted log at index %d", compactIndex)
-	rc.snapshotIndex = rc.appliedIndex
+	rc.snapshotIndex = rc.appliedIndex // 更新 raftNode 相关字段
 }
 
 func (rc *raftNode) serveChannels() {

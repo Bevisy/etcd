@@ -103,6 +103,7 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveHttpKVAPI starts a key-value server with a GET/PUT API and listens.
 func serveHttpKVAPI(kv *kvstore, port int, confChangeC chan<- raftpb.ConfChange, errorC <-chan error) {
+	// 初始化 http.Server，初始化 Handler。注意：结构体 httpKVAPI{} 实现了接口 Handler{}
 	srv := http.Server{
 		Addr: ":" + strconv.Itoa(port),
 		Handler: &httpKVAPI{
@@ -111,7 +112,7 @@ func serveHttpKVAPI(kv *kvstore, port int, confChangeC chan<- raftpb.ConfChange,
 		},
 	}
 	go func() {
-		if err := srv.ListenAndServe(); err != nil {
+		if err := srv.ListenAndServe(); err != nil { // 启动 server，收到请求后，会单独启动协程调用 httpKVAPI.ServeHTTP() 处理
 			log.Fatal(err)
 		}
 	}()
