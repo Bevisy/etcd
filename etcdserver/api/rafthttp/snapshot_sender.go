@@ -38,13 +38,13 @@ var (
 )
 
 type snapshotSender struct {
-	from, to types.ID
-	cid      types.ID
+	from, to types.ID // 记录当前节点ID 和对端节点ID
+	cid      types.ID // 记录当前集群的ID
 
-	tr     *Transport
-	picker *urlPicker
-	status *peerStatus
-	r      Raft
+	tr     *Transport  // 关联的 Transport 实例
+	picker *urlPicker  // 对端节点可用的 URL
+	status *peerStatus // 对端节点状态
+	r      Raft        // 底层 Raft 实例
 	errorc chan error
 
 	stopc chan struct{}
@@ -66,16 +66,18 @@ func newSnapshotSender(tr *Transport, picker *urlPicker, to types.ID, status *pe
 
 func (s *snapshotSender) stop() { close(s.stopc) }
 
+// 发送快照数据
 func (s *snapshotSender) send(merged snap.Message) {
 	start := time.Now()
 
 	m := merged.Message
 	to := types.ID(m.To).String()
 
-	body := createSnapBody(s.tr.Logger, merged)
+	body := createSnapBody(s.tr.Logger, merged) // 根据传入的 snap.Message 实例创建请求的 body
 	defer body.Close()
 
 	u := s.picker.pick()
+	// 创建 POST 请求，请求的路径是 "/raft/snapshot"
 	req := createPostRequest(u, RaftSnapshotPrefix, body, "application/octet-stream", s.tr.URLs, s.from, s.cid)
 
 	snapshotTotalSizeVal := uint64(merged.TotalSize)
@@ -97,8 +99,9 @@ func (s *snapshotSender) send(merged snap.Message) {
 		snapshotSendInflights.WithLabelValues(to).Dec()
 	}()
 
-	err := s.post(req)
+	err := s.post(req) // 发送请求
 	defer merged.CloseWithError(err)
+	// 请求异常处理
 	if err != nil {
 		if s.tr.Logger != nil {
 			s.tr.Logger.Warn(
@@ -131,7 +134,7 @@ func (s *snapshotSender) send(merged snap.Message) {
 		return
 	}
 	s.status.activate()
-	s.r.ReportSnapshot(m.To, raft.SnapshotFinish)
+	s.r.ReportSnapshot(m.To, raft.SnapshotFinish) // 请求发送成功，通知底层 etcd-raft 模块
 
 	if s.tr.Logger != nil {
 		s.tr.Logger.Info(
@@ -162,27 +165,30 @@ func (s *snapshotSender) post(req *http.Request) (err error) {
 		body []byte
 		err  error
 	}
-	result := make(chan responseAndError, 1)
+	result := make(chan responseAndError, 1) // 该通道用于返回该请求对应的响应（或是异常信息）
 
+	// 启动单独的协程用于发送请求并读取响应
 	go func() {
-		resp, err := s.tr.pipelineRt.RoundTrip(req)
+		resp, err := s.tr.pipelineRt.RoundTrip(req) // 发送请求
 		if err != nil {
-			result <- responseAndError{resp, nil, err}
+			result <- responseAndError{resp, nil, err} // 将异常写入通道
 			return
 		}
 
 		// close the response body when timeouts.
 		// prevents from reading the body forever when the other side dies right after
 		// successfully receives the request body.
+		//
+		// 超时处理
 		time.AfterFunc(snapResponseReadTimeout, func() { httputil.GracefulClose(resp) })
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := ioutil.ReadAll(resp.Body) // 读取响应数据
 		result <- responseAndError{resp, body, err}
 	}()
 
 	select {
 	case <-s.stopc:
 		return errStopped
-	case r := <-result:
+	case r := <-result: // 读取 result 通道，获取响应信息
 		if r.err != nil {
 			return r.err
 		}

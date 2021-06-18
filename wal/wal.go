@@ -36,11 +36,11 @@ import (
 )
 
 const (
-	metadataType int64 = iota + 1 // 特殊的日志项，被写在每个wal文件的头部
-	entryType                     // 应用的更新数据，也是日志中存储的最关键数据
-	stateType                     // 代表日志项中存储的内容是快照
-	crcType                       // 前一个wal文件里面的数据的crc，也是wal文件的第一个记录项
-	snapshotType                  // 当前快照的索引{term, index}，即当前的快照位于哪个日志记录，不同于stateType，这里只记录快照的索引，而非快照的数据
+	metadataType int64 = iota + 1 // 特殊的日志项，被写在每个wal文件的头部；该类型 Data 字段中保存一些元数据；
+	entryType                     // 应用的更新数据，也是日志中存储的最关键数据；该类型 Data 字段中保存的是 Entry 记录；
+	stateType                     // 该类型 Data 字段中当前集群的状态信息（HardState）；在每次大量写入 entryType 类型日志记录前，会先写入一条 stateType 类型日志记录
+	crcType                       // 前一个wal文件里面的数据的crc，也是 wal文件的第一个记录项
+	snapshotType                  // 当前快照的索引{term, index}，即当前的快照位于哪个日志记录，不同于stateType，这里只记录快照的索引，而非快照的数据; 该类型的日志记录中保存了快照数据的相关信息(walpb.Snapshot)
 
 	// warnSyncDuration is the amount of time allotted to an fsync before
 	// logging a warning
@@ -75,45 +75,48 @@ var (
 type WAL struct {
 	lg *zap.Logger
 
-	dir string // the living directory of the underlay files
+	dir string // WAL 日志文件路径
 
 	// dirFile is a fd for the wal directory for syncing on Rename
-	dirFile *os.File
+	dirFile *os.File // 根据 dir 路径创建的 File 实例
 
 	metadata []byte           // metadata recorded at the head of each WAL
 	state    raftpb.HardState // hardstate recorded at the head of WAL
 
 	start     walpb.Snapshot // snapshot to start reading
-	decoder   *decoder       // decoder to decode records
+	decoder   *decoder       // 负责在读取 WAL 日志文件时，将二进制数据反序列化成 Record 实例
 	readClose func() error   // closer for decode reader
 
 	unsafeNoSync bool // if set, do not fsync
 
 	mu      sync.Mutex
-	enti    uint64   // index of the last entry saved to the wal
-	encoder *encoder // encoder to encode records
+	enti    uint64   // WAL 中最后一条 Entry 记录的索引值
+	encoder *encoder // 负责将写入 WAL 日志文件的 Record 实例进行序列化成二进制数据
 
-	locks []*fileutil.LockedFile // the locked files the WAL holds (the name is increasing)
-	fp    *filePipeline
+	locks []*fileutil.LockedFile // 当前 WAL 实例管理的所有 WAL 日志文件对应的句柄
+	fp    *filePipeline          // filePipeline 实例负责创建新的临时文件
 }
 
 // Create creates a WAL ready for appending records. The given metadata is
 // recorded at the head of each WAL file, and can be retrieved with ReadAll
 // after the file is Open.
 func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
+	// 检测文件夹是否存在，存在则异常返回
 	if Exist(dirpath) {
 		return nil, os.ErrExist
 	}
 
 	// keep temporary wal directory so WAL initialization appears atomic
 	// 保留临时 wal 目录，以便 WAL 初始化显得原子化
+	// 获取临时目录的路径 tmpdirpath
 	tmpdirpath := filepath.Clean(dirpath) + ".tmp"
+	// 清空临时目录
 	if fileutil.Exist(tmpdirpath) {
 		if err := os.RemoveAll(tmpdirpath); err != nil {
 			return nil, err
 		}
 	}
-	// 创建 WAL 目录，用于存储 WAL 日志文件
+	// 创建临时 WAL 目录
 	if err := fileutil.CreateDirAll(tmpdirpath); err != nil {
 		if lg != nil {
 			lg.Warn(
@@ -164,10 +167,11 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		return nil, err
 	}
 
+	// 创建 WAL 实例
 	w := &WAL{
 		lg:       lg,
-		dir:      dirpath,
-		metadata: metadata,
+		dir:      dirpath,  // 存放 WAL 日志文件的目录路径
+		metadata: metadata, // 元数据
 	}
 	// 为 page writer 创建一个具有当前文件偏移量的新的 encoder
 	// TODO： encoder 结构，以及这里初始化的意义？
@@ -175,24 +179,23 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 增加 有文件锁的文件
+	// 将 WAL 日志文件对应的 LockedFile 实例记录到 locks 字段中，表示当前 WAL 实例正在管理该日志文件
 	w.locks = append(w.locks, f)
-	// 初始化 crc 纠错码
+	// 创建一条 crcType 类型的日志写入 WAL 日志文件
 	// TODO：crc 记错码如何计算？
 	if err = w.saveCrc(0); err != nil {
 		return nil, err
 	}
+	// 将元数据封装成一条 metadataType 类型的日志记录写入 WAL 日志文件
 	if err = w.encoder.encode(&walpb.Record{Type: metadataType, Data: metadata}); err != nil {
 		return nil, err
 	}
-	// TODO：初始化快照？
+	// 创建一条空的 snapshotType 类型的 日志记录写入临时文件
 	if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
 		return nil, err
 	}
 
-	// 重命名临时文件夹；
-	//
-	// Open 在 Create 完成后被调用，主要用于打开WAL目录下的日志文件，Open的主要作用是找到当前快照以后的所有WAL日志。
+	// 将临时目录重命名，并创建 WAL 实例关联的 filePipline 实例
 	if w, err = w.renameWAL(tmpdirpath); err != nil {
 		if lg != nil {
 			lg.Warn(
@@ -212,8 +215,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		}
 	}()
 
-	// directory was renamed; sync parent dir to persist rename
-	// wal 文件重新命名后，fsync 目录
+	// 临时目录重命名之后，需要将重命名操作刷新到磁盘上，
 	pdir, perr := fileutil.OpenDir(filepath.Dir(w.dir))
 	if perr != nil {
 		if lg != nil {
@@ -227,6 +229,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		return nil, perr
 	}
 	start := time.Now()
+	// 同步磁盘操作
 	if perr = fileutil.Fsync(pdir); perr != nil {
 		if lg != nil {
 			lg.Warn(
@@ -253,6 +256,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 		return nil, perr
 	}
 
+	// 返回 WAL 实例
 	return w, nil
 }
 
@@ -300,9 +304,9 @@ func (w *WAL) renameWAL(tmpdirpath string) (*WAL, error) {
 		}
 		return nil, err
 	}
-	w.fp = newFilePipeline(w.lg, w.dir, SegmentSizeBytes)
+	w.fp = newFilePipeline(w.lg, w.dir, SegmentSizeBytes) // 创建 WAL 实例关联的 filePipeline 实例
 	df, err := fileutil.OpenDir(w.dir)
-	w.dirFile = df
+	w.dirFile = df // WAL.dirFile 字段记录了 WAL 日志目录对应的文件句柄
 	return w, err
 }
 
@@ -377,12 +381,14 @@ func openAtIndex(lg *zap.Logger, dirpath string, snap walpb.Snapshot, write bool
 	w := &WAL{
 		lg:        lg,
 		dir:       dirpath,
-		start:     snap,
-		decoder:   newDecoder(rs...),
-		readClose: closer,
-		locks:     ls,
+		start:     snap,              // 记录快照信息
+		decoder:   newDecoder(rs...), // 创建用于读取日志记录的 decoder 实例，这里并没有初始化 encoder ，所以还不能写入日志记录
+		readClose: closer,            // 如果是只读模式 ，在读取完全部日志文件之后，则会调用该方法关闭所有日志文件
+		locks:     ls,                // 当前 WAL 实例管理的日志文件
 	}
 
+	// 如果是读写模式，读取完全部日志文件之后，由于后续有追加操作，所以不需要关闭日志文件；
+	// 另外，还要为 WAL 实例创建关联的 filePipeline 实例，用于产生新的日志文件
 	if write {
 		// write reuses the file descriptors from read; don't close so
 		// WAL can append without dropping the file lock
@@ -418,26 +424,29 @@ func openWALFiles(lg *zap.Logger, dirpath string, names []string, nameIndex int,
 	ls := make([]*fileutil.LockedFile, 0)
 	for _, name := range names[nameIndex:] {
 		p := filepath.Join(dirpath, name)
-		if write {
+		if write { // 以读写模式打开 WAL 日志文件
+			// 打开 WAL 日志文件并且对文件加锁
 			l, err := fileutil.TryLockFile(p, os.O_RDWR, fileutil.PrivateFileMode)
 			if err != nil {
 				closeAll(rcs...)
 				return nil, nil, nil, err
 			}
+			// 文件句柄记录到 ls 和 rcs 这两个切片中
 			ls = append(ls, l)
 			rcs = append(rcs, l)
-		} else {
+		} else { // 以只读模式打开文件
 			rf, err := os.OpenFile(p, os.O_RDONLY, fileutil.PrivateFileMode)
 			if err != nil {
 				closeAll(rcs...)
 				return nil, nil, nil, err
 			}
 			ls = append(ls, nil)
-			rcs = append(rcs, rf)
+			rcs = append(rcs, rf) // 只将文件句柄加入 rcs 切片
 		}
-		rs = append(rs, rcs[len(rcs)-1])
+		rs = append(rs, rcs[len(rcs)-1]) // 将文件句柄记录进 rs 切片
 	}
 
+	// 后面关闭文件时，会调用该函数
 	closer := func() error { return closeAll(rcs...) }
 
 	return rs, ls, closer, nil
