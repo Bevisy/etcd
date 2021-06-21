@@ -27,9 +27,7 @@ import (
 type TimeoutDetector struct {
 	mu          sync.Mutex // protects all
 	maxDuration time.Duration
-	// map from event to time
-	// time is the last seen time of the event.
-	records map[uint64]time.Time
+	records     map[uint64]time.Time // 该 map 中记录了上一次向目标节点发送心跳消息的时间 (key是节点 ID, value是具体时间)
 }
 
 // NewTimeoutDetector creates the TimeoutDetector.
@@ -59,7 +57,7 @@ func (td *TimeoutDetector) Observe(which uint64) (bool, time.Duration) {
 	exceed := time.Duration(0)
 
 	if pt, found := td.records[which]; found {
-		exceed = now.Sub(pt) - td.maxDuration
+		exceed = now.Sub(pt) - td.maxDuration // 计算两次心跳间隔是否超过指定值
 		if exceed > 0 {
 			ok = false
 		}

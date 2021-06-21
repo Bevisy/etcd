@@ -119,7 +119,7 @@ type Config struct {
 	// ID 是本地 raft 的身份标识。不能为 0
 	ID uint64
 
-	// peers 包含 raft 集群全部节点（包括自身）的ID。它应该仅仅在启动新 raft 集群时被设置。如果 peers 被设置，那么从之前的配置重启集群会 panic 。peers 是私有的，现在仅仅被用来测试。
+	// peers 包含 raft 集群全部节点（包括自身）的ID。它应该仅仅在启动新 raft 集群时被设置。如果 peers 被设置，那么从之前的配置重启集群会 panic.peers 是私有的，现在仅仅被用来测试。
 	peers []uint64
 
 	// learners 包含 raft 集群全部的 learner 节点 ID（包括自身为learner）。learners 只从 leader 接收 entries。它不参与投票和提升自己。
@@ -424,7 +424,7 @@ func (r *raft) hardState() pb.HardState {
 func (r *raft) send(m pb.Message) {
 	m.From = r.id // 设置消息发送节点 ID
 	if m.Type == pb.MsgVote || m.Type == pb.MsgVoteResp || m.Type == pb.MsgPreVote || m.Type == pb.MsgPreVoteResp {
-		if m.Term == 0 {
+		if m.Term == 0 { // 选举类消息任期不能为0
 			// All {pre-,}campaign messages need to have the term set when
 			// sending.
 			// - MsgVote: m.Term is the term the node is campaigning for,
@@ -526,7 +526,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 			}
 		}
 	}
-	// 发送之前创建的 MsgApp/MsgSnap 消息，raft.senf()会设置 MsgApp/MsgSnap 消息的 Term 值，并将其追加到 raft.msgs 中等待发送
+	// 发送之前创建的 MsgApp/MsgSnap 消息，raft.send()会设置 MsgApp/MsgSnap 消息的 Term 值，并将其追加到 raft.msgs 中等待发送
 	r.send(m)
 	return true
 }
@@ -816,9 +816,9 @@ func (r *raft) campaign(t CampaignType) {
 		// 确定最后发送消息的 Term 值，这里只是增加了消息的 Term 值，并未增加 raft.Term 字段的值
 		term = r.Term + 1
 	} else {
-		r.becomeCandidate()  // 将当前节点切换成 Candidate 状态，becomeCandidate （）方法中会增加 raft.Term 字段的值，并将当前节点的选票投给自身
+		r.becomeCandidate()  // 将当前节点切换成 Candidate 状态，becomeCandidate()方法中会增加 raft.Term 字段的值，并将当前节点的选票投给自身
 		voteMsg = pb.MsgVote // 确定最后发送的消息类型
-		term = r.Term
+		term = r.Term        // 确定最后发送消息的 Term
 	}
 	// 统计当前节点收到的选票， 并统计其得票数是否超过半数。这次检测主要是为单节点设置的
 	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
@@ -973,7 +973,7 @@ func (r *raft) Step(m pb.Message) error {
 			r.logger.Infof("%x is starting a new election at term %d", r.id, r.Term)
 			// 检测当前是否开启了 PreVote 模式，
 			if r.preVote {
-				// 状态切换；向集群其它节点发送对应的消息
+				// 调用 r.campaign 切换节点角色
 				r.campaign(campaignPreElection)
 			} else {
 				r.campaign(campaignElection)

@@ -856,6 +856,8 @@ func (w *WAL) Sync() error {
 // except the largest one among them.
 // For example, if WAL is holding lock 1,2,3,4,5,6, ReleaseLockTo(4) will release
 // lock 1,2 but keep 3. ReleaseLockTo(5) will release 1,2,3 but keep 4.
+//
+// 根据 WAL 日志的文件名和快照的元数据，将比较旧的 WAL 日志文件句柄从 WAL.locks 中清除
 func (w *WAL) ReleaseLockTo(index uint64) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -866,11 +868,13 @@ func (w *WAL) ReleaseLockTo(index uint64) error {
 
 	var smaller int
 	found := false
+	// 遍历 locks 字段，解析对应的 WAL 日志文件名，获取其中第一条记录的索引值
 	for i, l := range w.locks {
 		_, lockIndex, err := parseWALName(filepath.Base(l.Name()))
 		if err != nil {
 			return err
 		}
+		// 检测是否可清除改 WAL 日志文件的句柄
 		if lockIndex >= index {
 			smaller = i - 1
 			found = true
@@ -894,7 +898,7 @@ func (w *WAL) ReleaseLockTo(index uint64) error {
 		}
 		w.locks[i].Close()
 	}
-	w.locks = w.locks[smaller:]
+	w.locks = w.locks[smaller:] // 清除 smaller 之前的文件句柄
 
 	return nil
 }

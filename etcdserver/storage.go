@@ -31,8 +31,12 @@ import (
 type Storage interface {
 	// Save function saves ents and state to the underlying stable storage.
 	// Save MUST block until st and ents are on stable storage.
+	//
+	// Save()方法负责将 Entry记录和 HardState状态信息保存到底层的持久化存储上，该方法可能会阻塞; Storage 接口的实现是通过 WAL 模块将上述数据持久化到 WAL 日志文件中的
 	Save(st raftpb.HardState, ents []raftpb.Entry) error
 	// SaveSnap function saves snapshot to the underlying stable storage.
+	//
+	// SaveSnap()方法负责将快照数据持久到底层的持久化存储上，该方法也可能会阻塞; Storage 接口的实现是使用 Snapshotter 将快照数据保存到快照文件中
 	SaveSnap(snap raftpb.Snapshot) error
 	// Close closes the Storage and performs finalization.
 	Close() error
@@ -53,6 +57,7 @@ func NewStorage(w *wal.WAL, s *snap.Snapshotter) Storage {
 
 // SaveSnap saves the snapshot file to disk and writes the WAL snapshot entry.
 func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
+	// 根据快照的元数据创建对应的 walpb.Snapshot 实例
 	walsnap := walpb.Snapshot{
 		Index: snap.Metadata.Index,
 		Term:  snap.Metadata.Term,
@@ -60,12 +65,14 @@ func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 	// save the snapshot file before writing the snapshot to the wal.
 	// This makes it possible for the snapshot file to become orphaned, but prevents
 	// a WAL snapshot entry from having no corresponding snapshot file.
+	//
+	// 通过 Snapshotter 将快照数据写入到磁盘
 	err := st.Snapshotter.SaveSnap(snap)
 	if err != nil {
 		return err
 	}
 	// gofail: var raftBeforeWALSaveSnaphot struct{}
-
+	// 将 walpb.Snapshot 实例封装成 Record 记录写入 WAL 日志文件中
 	return st.WAL.SaveSnapshot(walsnap)
 }
 
