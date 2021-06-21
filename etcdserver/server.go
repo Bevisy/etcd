@@ -1002,6 +1002,7 @@ func (s *EtcdServer) run() {
 			}
 		},
 	}
+	// raftNode 启动
 	s.r.start(rh)
 
 	ep := etcdProgress{

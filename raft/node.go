@@ -201,7 +201,7 @@ type Node interface {
 	// a long time to apply the snapshot data. To continue receiving Ready without blocking raft
 	// progress, it can call Advance before finishing applying the last ready.
 	//
-	// 当上层模块处理完从上述 Channel 中返回的 Ready 实例之后 ， 需要调用 Advance （）通知底层的 etcd-raft 模块返回新的 Ready 实例
+	// 当上层模块处理完从上述 Channel 中返回的 Ready 实例之后 ， 需要调用 Advance()通知底层的 etcd-raft 模块返回新的 Ready 实例
 	Advance()
 	// ApplyConfChange applies a config change (previously passed to
 	// ProposeConfChange) to the node. This must be called whenever a config
