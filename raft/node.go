@@ -154,6 +154,7 @@ type Node interface {
 	// Tick 推进逻辑时钟的指针，从而推进 选举计时器 和 心跳计时器
 	Tick()
 	// Campaign causes the Node to transition to candidate state and start campaigning to become leader.
+	//
 	// Campaign 引起节点状态变化为 Candidate（先变成 PreCandidate），启动 leader 选举
 	Campaign(ctx context.Context) error
 	// Propose proposes that data be appended to the log. Note that proposals can be lost without
