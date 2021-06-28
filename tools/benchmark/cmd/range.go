@@ -51,20 +51,25 @@ func init() {
 }
 
 func rangeFunc(cmd *cobra.Command, args []string) {
+	// 检验参数，只支持 1~2 个参数
 	if len(args) == 0 || len(args) > 2 {
 		fmt.Fprintln(os.Stderr, cmd.Usage())
 		os.Exit(1)
 	}
 
+	// 参数赋值
 	k := args[0]
 	end := ""
 	if len(args) == 2 {
 		end = args[1]
 	}
 
+	// 只读方式
 	if rangeConsistency == "l" {
+		// linearizable adj. 可线性化的
 		fmt.Println("bench with linearizable range")
 	} else if rangeConsistency == "s" {
+		// serializable adj. 可序列化的
 		fmt.Println("bench with serializable range")
 	} else {
 		fmt.Fprintln(os.Stderr, cmd.Usage())
@@ -101,6 +106,8 @@ func rangeFunc(cmd *cobra.Command, args []string) {
 
 	go func() {
 		for i := 0; i < rangeTotal; i++ {
+			// v3.OpOption 类型为 func(*Op)
+			// v3.WithRange(end) 返回值为 func(op *Op) { op.end = []byte(endKey) }
 			opts := []v3.OpOption{v3.WithRange(end)}
 			if rangeConsistency == "s" {
 				opts = append(opts, v3.WithSerializable())
