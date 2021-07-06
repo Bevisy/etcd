@@ -89,16 +89,18 @@ type store struct {
 
 	ig ConsistentIndexGetter
 
-	b       backend.Backend
+	b       backend.Backend // 当前 store 实例关联的后端存储
 	kvindex index
 
-	le lease.Lessor
+	le lease.Lessor // 当前 store 实例关联的内存索引
 
 	// revMuLock protects currentRev and compactMainRev.
 	// Locked at end of write txn and released after write txn unlock lock.
 	// Locked before locking read txn and released after locking.
 	revMu sync.RWMutex
 	// currentRev is the revision of the last completed transaction.
+	//
+	// currentRev
 	currentRev int64
 	// compactMainRev is the main revision of the last compaction.
 	compactMainRev int64
