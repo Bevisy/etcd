@@ -23,6 +23,9 @@ const revBytesLen = 8 + 1 + 8
 
 // A revision indicates modification of the key-value space.
 // The set of changes that share same main revision changes the key-value space atomically.
+//
+// revision 代表对键值空间的修改
+// 共享同一个 main revision 的改变集合原子性地改变键值空间
 type revision struct {
 	// main is the main revision of a set of changes that happen atomically.
 	main int64

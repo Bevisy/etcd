@@ -37,9 +37,13 @@ type ReadView interface {
 	// FirstRev returns the first KV revision at the time of opening the txn.
 	// After a compaction, the first revision increases to the compaction
 	// revision.
+	//
+	// FirstRev() 返回开启当前只读事务时的 revision 信息。当进行一次压缩操作之后，该方法的返回值会被更新成压缩时的 revision 信息，也就是压缩后的最小 revision
 	FirstRev() int64
 
 	// Rev returns the revision of the KV at the time of opening the txn.
+	//
+	// Rev() 返回开启当前只读事务时的 revision 信息
 	Rev() int64
 
 	// Range gets the keys in the range at rangeRev.
@@ -58,6 +62,8 @@ type ReadView interface {
 type TxnRead interface {
 	ReadView
 	// End marks the transaction is complete and ready to commit.
+	//
+	// End() 表示当前事务已经完成，并准备提交
 	End()
 }
 
@@ -69,6 +75,8 @@ type WriteView interface {
 	// It also generates one event for each key delete in the event history.
 	// if the `end` is nil, deleteRange deletes the key.
 	// if the `end` is not nil, deleteRange deletes the keys in range [key, range_end).
+	//
+	// 范围删除
 	DeleteRange(key, end []byte) (n, rev int64)
 
 	// Put puts the given key, value into the store. Put also takes additional argument lease to
@@ -76,6 +84,8 @@ type WriteView interface {
 	// id.
 	// A put also increases the rev of the store, and generates one event in the event history.
 	// The returned rev is the current revision of the KV when the operation is executed.
+	//
+	// 添加指定的键值对
 	Put(key, value []byte, lease lease.LeaseID) (rev int64)
 }
 
@@ -84,10 +94,14 @@ type TxnWrite interface {
 	TxnRead
 	WriteView
 	// Changes gets the changes made since opening the write txn.
+	//
+	// 返回自事务开启之后修改的键值对信息
 	Changes() []mvccpb.KeyValue
 }
 
 // txnReadWrite coerces a read txn to a write, panicking on any write operation.
+//
+// txnReadWrite 胁迫一个读txn为写，在任何写操作上恐慌
 type txnReadWrite struct{ TxnRead }
 
 func (trw *txnReadWrite) DeleteRange(key, end []byte) (n, rev int64) { panic("unexpected DeleteRange") }
@@ -103,24 +117,38 @@ type KV interface {
 	WriteView
 
 	// Read creates a read transaction.
+	//
+	// Read 创建一个读事务
 	Read(trace *traceutil.Trace) TxnRead
 
 	// Write creates a write transaction.
+	//
+	// Write 创建一个写事务
 	Write(trace *traceutil.Trace) TxnWrite
 
 	// Hash computes the hash of the KV's backend.
+	//
+	// Hash 计算 KV 的后端哈希值
 	Hash() (hash uint32, revision int64, err error)
 
 	// HashByRev computes the hash of all MVCC revisions up to a given revision.
+	//
+	// HashByRev 计算截至给定版本的所有 MVCC 版本的哈希值
 	HashByRev(rev int64) (hash uint32, revision int64, compactRev int64, err error)
 
 	// Compact frees all superseded keys with revisions less than rev.
+	//
+	// Compact 释放全部被取代的小于 rev 版本的键
 	Compact(trace *traceutil.Trace, rev int64) (<-chan struct{}, error)
 
 	// Commit commits outstanding txns into the underlying backend.
+	//
+	// Commit 提交未完成的 txn 到后端底层（BoltDB）
 	Commit()
 
 	// Restore restores the KV store from a backend.
+	//
+	// Restore 从后端(BoltDB)恢复内存索引
 	Restore(b backend.Backend) error
 	Close() error
 }
