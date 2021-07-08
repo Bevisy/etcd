@@ -389,7 +389,7 @@ func (r *raftNode) processMessages(ms []raftpb.Message) []raftpb.Message {
 			case r.msgSnapC <- ms[i]: // 将 MsgSnap 消息写入 msgSnapC 远远中
 			default:
 				// drop msgSnap if the inflight chan if full.
-				// 如采 msgSnapC 通道的缓冲区满，则放弃此次快照的发送
+				// 如果 msgSnapC 通道的缓冲区满，则放弃此次快照的发送
 			}
 			ms[i].To = 0 // 将目标节点设置为 0，则 raftNode.transport后续不会发送该消息
 		}

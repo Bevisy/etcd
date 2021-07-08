@@ -80,8 +80,8 @@ type WAL struct {
 	// dirFile is a fd for the wal directory for syncing on Rename
 	dirFile *os.File // 根据 dir 路径创建的 File 实例
 
-	metadata []byte           // metadata recorded at the head of each WAL
-	state    raftpb.HardState // hardstate recorded at the head of WAL
+	metadata []byte           // metadata 被记录在每个 WAL 文件头部
+	state    raftpb.HardState // hardstate 被记录在每个 WAL 文件头部
 
 	start     walpb.Snapshot // snapshot to start reading
 	decoder   *decoder       // 负责在读取 WAL 日志文件时，将二进制数据反序列化成 Record 实例
@@ -107,6 +107,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	}
 
 	// keep temporary wal directory so WAL initialization appears atomic
+	//
 	// 保留临时 wal 目录，以便 WAL 初始化显得原子化
 	// 获取临时目录的路径 tmpdirpath
 	tmpdirpath := filepath.Clean(dirpath) + ".tmp"
@@ -462,23 +463,33 @@ func openWALFiles(lg *zap.Logger, dirpath string, names []string, nameIndex int,
 // TODO: detect not-last-snap error.
 // TODO: maybe loose the checking of match.
 // After ReadAll, the WAL will be ready for appending new records.
+//
+// ReadAll() 读取当前 WAL 实例的记录
+// 如果是以读写模式打开，则必须读取全部记录或者错误退出
+// 如果是以只读模式打开，将会尽可能读取全部记录
+// 如果不能读取到期望的快照索引，将返回 ErrSnapshotNotFound
+// 如果载入的快照不能匹配期望的那个，将返回全部的记录和错误 ErrSnapshotMismatch
+// ReadAll 之后， WAL 实例将准备好追加新的记录
 func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.Entry, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	rec := &walpb.Record{}
+	rec := &walpb.Record{} // 创建 Record 实例
 
 	if w.decoder == nil {
 		return nil, state, nil, ErrDecoderNotFound
 	}
-	decoder := w.decoder
+	decoder := w.decoder // 解码器，负责读取日志文件，并将日志数据反序列化成 Record 实例
 
-	var match bool
+	var match bool // 标识是否找到了 start 字段对应的日志记录
+	// 循环读取 WAL 日志文件中的数据，多个 wal 文件切换在 decoder 中完成
 	for err = decoder.decode(rec); err == nil; err = decoder.decode(rec) {
+		// 根据日志记录类型分开处理
 		switch rec.Type {
 		case entryType:
-			e := mustUnmarshalEntry(rec.Data)
+			e := mustUnmarshalEntry(rec.Data) // 反序列化 Record.Data 中记录的数据，得到 Entry 实例
 			// 0 <= e.Index-w.start.Index - 1 < len(ents)
+			// 将 start 之后的 Entry 记录添加到 ents
 			if e.Index > w.start.Index {
 				// prevent "panic: runtime error: slice bounds out of range [:13038096702221461992] with capacity 0"
 				up := e.Index - w.start.Index - 1
@@ -488,17 +499,18 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 				}
 				ents = append(ents[:up], e)
 			}
-			w.enti = e.Index
+			w.enti = e.Index // 记录读取到的最后一条 Entry 记录的索引值
 
 		case stateType:
-			state = mustUnmarshalState(rec.Data)
+			state = mustUnmarshalState(rec.Data) // 更新待返回的 HardState 状态信息
 
 		case metadataType:
+			// 检测 metadata 数据是否发生冲突，冲突则抛出异常
 			if metadata != nil && !bytes.Equal(metadata, rec.Data) {
 				state.Reset()
 				return nil, state, nil, ErrMetadataConflict
 			}
-			metadata = rec.Data
+			metadata = rec.Data // 更新待返回的元数据
 
 		case crcType:
 			crc := decoder.crc.Sum32()
@@ -508,36 +520,42 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 				state.Reset()
 				return nil, state, nil, ErrCRCMismatch
 			}
-			decoder.updateCRC(rec.Crc)
+			decoder.updateCRC(rec.Crc) // 更新 decoder.crc 字段
 
 		case snapshotType:
 			var snap walpb.Snapshot
-			pbutil.MustUnmarshal(&snap, rec.Data)
+			pbutil.MustUnmarshal(&snap, rec.Data) // 解析快照数据
 			if snap.Index == w.start.Index {
 				if snap.Term != w.start.Term {
 					state.Reset()
 					return nil, state, nil, ErrSnapshotMismatch
 				}
-				match = true
+				match = true // 快照索引和任期匹配 wal.start
 			}
 
 		default:
 			state.Reset()
-			return nil, state, nil, fmt.Errorf("unexpected block type %d", rec.Type)
+			return nil, state, nil, fmt.Errorf("unexpected block type %d", rec.Type) // 未知类型处理
 		}
 	}
 
+	// WAL 日志文件读取完成。
+	// 根据 wal.locks 字段判断当前 WAL 实例所处模式（只读模式、读写模式）
 	switch w.tail() {
 	case nil:
 		// We do not have to read out all entries in read mode.
 		// The last record maybe a partial written one, so
 		// ErrunexpectedEOF might be returned.
+		//
+		// 对于只读模式，并不需要将全部的日志都读出来，因为以只读模式打开 WAL 日志文件时，并没有加锁，所以最后一条日志记录可能只写了一半，从而导致 io.ErrUnexpectedEOF 异常
 		if err != io.EOF && err != io.ErrUnexpectedEOF {
 			state.Reset()
 			return nil, state, nil, err
 		}
 	default:
 		// We must read all of the entries if WAL is opened in write mode.
+		//
+		// 读写模式下，必须读取全部 Entry
 		if err != io.EOF {
 			state.Reset()
 			return nil, state, nil, err
@@ -548,6 +566,9 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 		// not all, will cause CRC errors on WAL open. Since the records
 		// were never fully synced to disk in the first place, it's safe
 		// to zero them out to avoid any CRC errors from new writes.
+		//
+		// 如果检测到 zero 记录，decodeRecord() 将返回 io.EOF
+		// 将文件指针移动到读取结束的位置 ，并将文件后续部分全部填充为 0
 		if _, err = w.tail().Seek(w.decoder.lastOffset(), io.SeekStart); err != nil {
 			return nil, state, nil, err
 		}
@@ -557,19 +578,24 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 	}
 
 	err = nil
+	// 如果读取过程中没有找到与 start（快照）对应的日志记录，则抛出异常
 	if !match {
 		err = ErrSnapshotNotFound
 	}
 
 	// close decoder, disable reading
+	//
+	// 如果是只读模式，则关闭所有的日志文件
 	if w.readClose != nil {
-		w.readClose()
+		w.readClose() // 指向方法 wal.closeAll()
 		w.readClose = nil
 	}
+	// 清空 w.start 字段
 	w.start = walpb.Snapshot{}
 
 	w.metadata = metadata
 
+	// 如果是读写模式，则初始化 w.encoder 字段，为后面写入日志做准备
 	if w.tail() != nil {
 		// create encoder (chain crc with the decoder), enable appending
 		w.encoder, err = newFileEncoder(w.tail().File, w.decoder.lastCRC())
@@ -577,7 +603,7 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 			return
 		}
 	}
-	w.decoder = nil
+	w.decoder = nil // 清空 decoder 字段，后续不再使用该 WAL 实例进行读取
 
 	return metadata, state, ents, err
 }
@@ -729,81 +755,105 @@ func Verify(lg *zap.Logger, walDir string, snap walpb.Snapshot) error {
 // cut closes current file written and creates a new one ready to append.
 // cut first creates a temp wal file and writes necessary headers into it.
 // Then cut atomically rename temp wal file to a wal file.
+//
+// cut 方法关闭当前文件写入，并创建新的文件准备去追加。
+// cut 首先创建临时的 wal 文件并写入必要的头部。
+// 然后 cut 自动重命名临时 wal 文件为正式 wal 文件
 func (w *WAL) cut() error {
 	// close old wal file; truncate to avoid wasting space if an early cut
+	// 获取当前日志文件的指针位置
 	off, serr := w.tail().Seek(0, io.SeekCurrent)
 	if serr != nil {
 		return serr
 	}
 
+	// 根据当前文件的指针位置，将后续填充内容 Truncate，主要是处理早切换和预分配空间未使用的情况，truncate 后可以释放该日志文件后未使用的空间
 	if err := w.tail().Truncate(off); err != nil {
 		return err
 	}
 
+	// 将修改同步刷新到磁盘
 	if err := w.sync(); err != nil {
 		return err
 	}
 
+	// 根据当前最后一个日志的名称，确定下一个新日志文件的名称
+	// seq() 方法返回当前最后一个日志文件的编号，w.enti 记录最后一条日志的索引值
 	fpath := filepath.Join(w.dir, walName(w.seq()+1, w.enti+1))
 
 	// create a temp wal file with name sequence + 1, or truncate the existing one
+	// 从 filePipeline 获取新建的临时文件
 	newTail, err := w.fp.Open()
 	if err != nil {
 		return err
 	}
 
 	// update writer and save the previous crc
+	// 将临时文件句柄保存到 WAL.locks 中
 	w.locks = append(w.locks, newTail)
 	prevCrc := w.encoder.crc.Sum32()
+	// 创建临时文件对应的 encoder 实例，并更新到 WAL.encoder 字段中
 	w.encoder, err = newFileEncoder(w.tail().File, prevCrc)
 	if err != nil {
 		return err
 	}
 
+	// 向临时文件追加一条 crcType 类型的日志记录
 	if err = w.saveCrc(prevCrc); err != nil {
 		return err
 	}
 
+	// 追加 metadataType 类型日志记录
 	if err = w.encoder.encode(&walpb.Record{Type: metadataType, Data: w.metadata}); err != nil {
 		return err
 	}
 
+	// 追加 stateType 类型日志记录
 	if err = w.saveState(&w.state); err != nil {
 		return err
 	}
 
 	// atomically move temp wal file to wal file
+	// 修改同步到磁盘
 	if err = w.sync(); err != nil {
 		return err
 	}
 
+	// 记录当前文件指针位置，为重命名后打开文件做准备
 	off, err = w.tail().Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
 
+	// 重命名临时文件为目标文件
 	if err = os.Rename(newTail.Name(), fpath); err != nil {
 		return err
 	}
 	start := time.Now()
+	// 将重命名操作落盘，fsync 除了落盘数据，还会落盘文件元数据(例如 文件长度和名称等)
 	if err = fileutil.Fsync(w.dirFile); err != nil {
 		return err
 	}
 	walFsyncSec.Observe(time.Since(start).Seconds())
 
 	// reopen newTail with its new path so calls to Name() match the wal filename format
+	// 关闭临时文件对应的句柄
 	newTail.Close()
 
+	// 打开重命名后的新日志文件
 	if newTail, err = fileutil.LockFile(fpath, os.O_WRONLY, fileutil.PrivateFileMode); err != nil {
 		return err
 	}
+	// 将文件指针移动到之前保存的位置
 	if _, err = newTail.Seek(off, io.SeekStart); err != nil {
 		return err
 	}
 
+	// 将 wal.locks 中最后一项更新成新日志文件
 	w.locks[len(w.locks)-1] = newTail
 
 	prevCrc = w.encoder.crc.Sum32()
+	// 创建新日志文件对应的 encoder 实例，并更新到 wal.encoder 字段中
 	w.encoder, err = newFileEncoder(w.tail().File, prevCrc)
 	if err != nil {
 		return err
@@ -819,6 +869,7 @@ func (w *WAL) cut() error {
 
 func (w *WAL) sync() error {
 	if w.encoder != nil {
+		// 先使用 encoder.flush() 进行同步刷新
 		if err := w.encoder.flush(); err != nil {
 			return err
 		}
@@ -829,6 +880,7 @@ func (w *WAL) sync() error {
 	}
 
 	start := time.Now()
+	// 调用操作系统的 Fdatasync 将数据真正刷新到磁盘
 	err := fileutil.Fdatasync(w.tail().File)
 
 	took := time.Since(start)
@@ -936,22 +988,31 @@ func (w *WAL) Close() error {
 
 func (w *WAL) saveEntry(e *raftpb.Entry) error {
 	// TODO: add MustMarshalTo to reduce one allocation.
+	// 序列化成 字节数组
 	b := pbutil.MustMarshal(e)
+	// 将序列化后的数据封装成 entryType 类型的 Record
 	rec := &walpb.Record{Type: entryType, Data: b}
+	// 通过 encoder.encode() 方法追加日志记录
 	if err := w.encoder.encode(rec); err != nil {
 		return err
 	}
+	// 更新 WAL.enti 字段，保存最后一条 Entry 的索引值
 	w.enti = e.Index
 	return nil
 }
 
 func (w *WAL) saveState(s *raftpb.HardState) error {
+	// 给定的 HardState 为空，则直接返回 nil
 	if raft.IsEmptyHardState(*s) {
 		return nil
 	}
+	// 更新 WAL.state 字段
 	w.state = *s
+	// 序列化成 字节数组
 	b := pbutil.MustMarshal(s)
+	// 封装成 stateType 类型的 Record
 	rec := &walpb.Record{Type: stateType, Data: b}
+	// 追加到日志记录
 	return w.encoder.encode(rec)
 }
 
@@ -959,7 +1020,7 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// short cut, do not call sync
+	// 边界检查，如果待写入的 HardStatr 和 Entries 都为空，则直接返回；否则就需要将修改同步到磁盘上
 	if raft.IsEmptyHardState(st) && len(ents) == 0 {
 		return nil
 	}
@@ -967,26 +1028,31 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	mustSync := raft.MustSync(st, w.state, len(ents))
 
 	// TODO(xiangli): no more reference operator
+	// 遍历待写入的 Entry 数组，将每个 Entry 实例序列化并封装 entryType 类型的日志记录，写入日志文件
 	for i := range ents {
 		if err := w.saveEntry(&ents[i]); err != nil {
 			return err
 		}
 	}
+	// 将状态信息（HardState）序列化并封装成 stateType 类型的日志记录，写入日志文件
 	if err := w.saveState(&st); err != nil {
 		return err
 	}
 
+	// 获取当前日志段文件指针的位置
 	curOff, err := w.tail().Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
+	// 如果未写满预分配的空间，将新日志刷新到磁盘后，返回 nil
 	if curOff < SegmentSizeBytes {
 		if mustSync {
-			return w.sync()
+			return w.sync() // 将上述追加的日志记录同步刷新到磁盘上
 		}
 		return nil
 	}
 
+	// 当前文件大小超出预分配的空间，则需要进行日志文件的切换
 	return w.cut()
 }
 
