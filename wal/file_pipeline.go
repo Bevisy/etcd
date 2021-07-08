@@ -71,6 +71,7 @@ func (fp *filePipeline) Close() error {
 
 func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 	// count % 2 so this file isn't the same as the one last published
+	//
 	// 为了防止与前一个创建的临时文件重名，新建临时文件的编号是 0 或是 1
 	fpath := filepath.Join(fp.dir, fmt.Sprintf("%d.tmp", fp.count%2))
 	// 创建临时文件
