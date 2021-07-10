@@ -48,6 +48,8 @@ func (td *TimeoutDetector) Reset() {
 
 // Observe observes an event for given id. It returns false and exceeded duration
 // if the interval is longer than the expectation.
+//
+// 如果两次心跳发送事件间隔超时，则返回 false 和 超时部分的时间
 func (td *TimeoutDetector) Observe(which uint64) (bool, time.Duration) {
 	td.mu.Lock()
 	defer td.mu.Unlock()
@@ -57,11 +59,11 @@ func (td *TimeoutDetector) Observe(which uint64) (bool, time.Duration) {
 	exceed := time.Duration(0)
 
 	if pt, found := td.records[which]; found {
-		exceed = now.Sub(pt) - td.maxDuration // 计算两次心跳间隔是否超过指定值
+		exceed = now.Sub(pt) - td.maxDuration // 计算两次发送心跳间隔: 两次心跳发送事件间隔 - 期望值（两倍心跳时间）
 		if exceed > 0 {
 			ok = false
 		}
 	}
-	td.records[which] = now
+	td.records[which] = now // 重置节点发送心跳事件时间
 	return ok, exceed
 }

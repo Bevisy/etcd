@@ -56,6 +56,7 @@ var (
 func startEtcdOrProxyV2() {
 	grpc.EnableTracing = false
 
+	// 新建配置实例
 	cfg := newConfig()
 	defaultInitialCluster := cfg.ec.InitialCluster
 

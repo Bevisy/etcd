@@ -41,7 +41,7 @@ type Progress struct {
 	// 如果 pendingSnapshot 被设置，这个 Progress 的复制进程将被暂停。raft将不会重新发送快照，直到 pending 快照被报告为失败。
 	PendingSnapshot uint64
 
-	// 如果该进度最近是活跃的，则 RecentActive 为 true。从相应的跟随者那里收到任何消息都表明该进度是活跃的。
+	// 如果该进度最近是活跃的，则 RecentActive 为 true。从相应的 follower 那里收到任何消息都表明该进度是活跃的。
 	// 在选举超时后，RecentActive可以被重置为false。
 	//
 	// TODO(tbg): the leader should always have this set to true.
@@ -51,21 +51,23 @@ type Progress struct {
 	// 当 ProbeSent 为 true，raft 应该暂停发送复制消息到这个节点直到 ProbeSent 被重置。查看 ProbeAcked() 和 IsPaused()
 	ProbeSent bool
 
-	// Inflights 是一个滑动窗口，用于记录 inflight 消息
+	// Inflights 是一个滑动窗口，用于记录 inflight 消息。
 	// 每个 inflight 消息包含一个或者多个日志条目。
 	// 每个消息的最大条目被 raft 配置 MaxSizePerMsg 定义。
 	// 因此，inflight 有效的限制 inflight 消息的数量 和 每个进程可以使用的带宽。
 	// 当 inflight 是满的，没法在发送更多的消息。
-	// 当 leader 发送完消息，最后一个 entry 的索引应该被添加到 inflights。索引必须被顺序添加加进 inflights。
+	// 当 leader 发送完消息，最后一个 entry 的索引应该被添加到 inflights。索引必须被顺序添加进 inflights。
 	// 当 leader 收到回复，应该通过调用 inflights.FreeLE 和最后收到的条目的索引来释放之前的 inflights。
 	Inflights *Inflights
 
-	// IsLearner 为 true 如果这个进程为 learner 而被跟踪
+	// 如果这个进程为 learner 而被跟踪，IsLearner 为 true
 	IsLearner bool
 }
 
 // ResetState moves the Progress into the specified State, resetting ProbeSent,
 // PendingSnapshot, and Inflights.
+//
+// 重置 Progress 实例状态
 func (pr *Progress) ResetState(state StateType) {
 	pr.ProbeSent = false
 	pr.PendingSnapshot = 0
