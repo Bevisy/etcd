@@ -169,7 +169,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 		for {
 			select {
-			case <-r.ticker.C: // 计时器到期触发，调用 Tick() 方法推荐心跳或者选举超时计时器
+			case <-r.ticker.C: // 计时器到期触发，调用 Tick() 方法推进心跳超时或者选举超时计时器
 				r.tick()
 			case rd := <-r.Ready(): //
 				if rd.SoftState != nil {
@@ -184,6 +184,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 						hasLeader.Set(1)
 					}
 
+					// 判断节点是否为 lead
 					rh.updateLead(rd.SoftState.Lead)
 					islead = rd.RaftState == raft.StateLeader
 					if islead {
@@ -199,7 +200,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				if len(rd.ReadStates) != 0 {
 					select {
 					case r.readStateC <- rd.ReadStates[len(rd.ReadStates)-1]:
-					case <-time.After(internalTimeout):
+					case <-time.After(internalTimeout): // 如果上层应用一直没有读取写入 readStateC 通道中的 ReadState 实例，会导致本次写入阻塞，这里会等待 1s，如果依然无法写入，则放弃写入并输出警告日志
 						if r.lg != nil {
 							r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeout))
 						} else {
@@ -211,14 +212,14 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				}
 
 				notifyc := make(chan struct{}, 1)
-				// 将 Ready 实例中的待应用 Entry 记录以及快照数据封装成 apply 实例 ，其中封装了 notifyc 通道，该通道用来协调当前 goroutine 和 EtcdServer 启动的后台 goroutine 的执行
+				// 将 Ready 实例中的待应用 Entry 记录以及快照数据封装成 apply 实例，其中封装了 notifyc 通道，该通道用来协调当前 goroutine 和 etcdServer 启动的后台 goroutine 的执行
 				ap := apply{
 					entries:  rd.CommittedEntries, // 已提交待应用的 Entry 记录
 					snapshot: rd.Snapshot,         // 待持久化的快照
 					notifyc:  notifyc,
 				}
 
-				// 更新 EtcdServer 中记录的己提交位置( EtcdServer . committedindex 字段 )
+				// 更新 etcdServer 中记录的己提交位置( EtcdServer.committedindex 字段 )
 				updateCommittedIndex(&ap, rh)
 
 				select {
@@ -363,7 +364,7 @@ func updateCommittedIndex(ap *apply, rh *raftReadyHandler) {
 	}
 }
 
-// 首先会对消息进行过滤，去除目标节点己被移出集群 的消息，然后分别过滤 MsgAppResp 消息、 MsgSnap 消息和 MsgHeartbeat 消息
+// 首先会对消息进行过滤，去除目标节点己被移出集群的消息，然后分别过滤 MsgAppResp 消息、MsgSnap 消息和 MsgHeartbeat 消息
 func (r *raftNode) processMessages(ms []raftpb.Message) []raftpb.Message {
 	sentAppResp := false
 	for i := len(ms) - 1; i >= 0; i-- {
@@ -371,7 +372,7 @@ func (r *raftNode) processMessages(ms []raftpb.Message) []raftpb.Message {
 			ms[i].To = 0
 		}
 
-		// 只会发送最后 一条 MsgAppResp 消息，没有必要同时发送多条 MsgAppResp 消息
+		// 只会发送最后一条 MsgAppResp 消息，没有必要同时发送多条 MsgAppResp 消息
 		if ms[i].Type == raftpb.MsgAppResp {
 			if sentAppResp {
 				ms[i].To = 0
