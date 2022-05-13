@@ -129,19 +129,21 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 // 如果没有冲突的 entries, 但是传入的 ents 包含新的 entries, 第一个新的 entry 的索引将被返回。
 // An entry is considered to be conflicting if it has the same index but
 // a different term.
+// 如果 index 相同但 term 不同，记录被认为发生冲突
 // The first entry MUST have an index equal to the argument 'from'.
 // The index of the given entries MUST be continuously increasing.
 func (l *raftLog) findConflict(ents []pb.Entry) uint64 {
+	// 遍历全部待追加的 Entry，判断 raftLog 中是否存在冲突的 Entry 记录
 	for _, ne := range ents {
-		if !l.matchTerm(ne.Index, ne.Term) {
+		if !l.matchTerm(ne.Index, ne.Term) { // 查找冲突的 Entry 记录
 			if ne.Index <= l.lastIndex() {
 				l.logger.Infof("found conflict at index %d [existing term: %d, conflicting term: %d]",
 					ne.Index, l.zeroTermOnErrCompacted(l.term(ne.Index)), ne.Term)
 			}
-			return ne.Index
+			return ne.Index // 返回冲突记录的索引值
 		}
 	}
-	return 0
+	return 0 //如果未发生冲突 Entry，则返回 0
 }
 
 func (l *raftLog) unstableEntries() []pb.Entry {
